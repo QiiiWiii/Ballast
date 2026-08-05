@@ -1,0 +1,41 @@
+[workspace]
+members = [
+  "crates/ballast-core",
+  "crates/ballast-strategies",
+  "crates/ballast-execution",
+  "crates/ballast-simulator",
+  "crates/ballast-gateway-client",
+  "crates/ballast-storage",
+  "crates/ballast-server",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+repository = "https://github.com/QiiiWiii/Ballast"
+
+[workspace.dependencies]
+async-trait = "0.1"
+axum = "0.8"
+prost = "0.13"
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio-rustls",
+  "postgres",
+  "migrate",
+  "macros",
+  "rust_decimal",
+  "uuid",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tonic = "0.12"
+tower-http = { version = "0.6", features = ["request-id", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["serde", "v7"] }

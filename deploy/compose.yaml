@@ -1,0 +1,52 @@
+name: ballast
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: ballast
+      POSTGRES_USER: ballast
+      POSTGRES_PASSWORD: ballast
+    ports:
+      - "5432:5432"
+    volumes:
+      - ballast-postgres:/var/lib/postgresql/data
+      - ../migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ballast -d ballast"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/gateway.Dockerfile
+    environment:
+      BALLAST_GATEWAY_BIND: 0.0.0.0:50051
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "50051:50051"
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    environment:
+      BALLAST_SERVER_BIND: 0.0.0.0:8080
+      BALLAST_GATEWAY_ENDPOINT: http://gateway:50051
+      DATABASE_URL: postgres://ballast:ballast@postgres:5432/ballast
+      RUST_LOG: ${RUST_LOG:-ballast_server=info,tower_http=info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  ballast-postgres:

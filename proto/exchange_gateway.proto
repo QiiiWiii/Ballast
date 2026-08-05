@@ -1,0 +1,266 @@
+syntax = "proto3";
+
+package ballast.gateway.v1;
+
+// ExchangeGateway deliberately exposes a typed execution boundary instead of
+// a generic ccxt method passthrough.
+service ExchangeGateway {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ListInstruments(ListInstrumentsRequest) returns (ListInstrumentsResponse);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (ExchangeCapabilities);
+  rpc GetOrderBook(GetOrderBookRequest) returns (OrderBook);
+  rpc StreamTrades(StreamTradesRequest) returns (stream Trade);
+  rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse);
+  rpc GetPositions(GetPositionsRequest) returns (GetPositionsResponse);
+  rpc GetOpenOrders(GetOpenOrdersRequest) returns (GetOpenOrdersResponse);
+  rpc GetOrder(GetOrderRequest) returns (Order);
+  rpc CreateOrder(CreateOrderRequest) returns (OrderSubmission);
+  rpc CancelOrder(CancelOrderRequest) returns (OrderSubmission);
+  rpc StreamOrderUpdates(StreamAccountRequest) returns (stream Order);
+  rpc StreamFills(StreamAccountRequest) returns (stream Fill);
+}
+
+enum Exchange {
+  EXCHANGE_UNSPECIFIED = 0;
+  EXCHANGE_BINANCE = 1;
+  EXCHANGE_OKX = 2;
+  EXCHANGE_BYBIT = 3;
+  EXCHANGE_GATE_IO = 4;
+  EXCHANGE_BITGET = 5;
+}
+
+enum MarketKind {
+  MARKET_KIND_UNSPECIFIED = 0;
+  MARKET_KIND_SPOT = 1;
+  MARKET_KIND_PERPETUAL = 2;
+  MARKET_KIND_FUTURE = 3;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_MARKET = 1;
+  ORDER_TYPE_LIMIT = 2;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PENDING_SUBMISSION = 1;
+  ORDER_STATUS_OPEN = 2;
+  ORDER_STATUS_PARTIALLY_FILLED = 3;
+  ORDER_STATUS_FILLED = 4;
+  ORDER_STATUS_PENDING_CANCEL = 5;
+  ORDER_STATUS_CANCELLED = 6;
+  ORDER_STATUS_REJECTED = 7;
+  ORDER_STATUS_EXPIRED = 8;
+  ORDER_STATUS_SUBMISSION_UNKNOWN = 9;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+  string service_version = 2;
+  int64 gateway_time_ms = 3;
+}
+
+message AccountRef {
+  Exchange exchange = 1;
+  string account_id = 2;
+}
+
+message InstrumentKey {
+  Exchange exchange = 1;
+  MarketKind market_kind = 2;
+  string symbol = 3;
+}
+
+message ListInstrumentsRequest {
+  Exchange exchange = 1;
+  MarketKind market_kind = 2;
+}
+
+message Instrument {
+  InstrumentKey key = 1;
+  string base_asset = 2;
+  string quote_asset = 3;
+  string price_tick = 4;
+  string quantity_step = 5;
+  string minimum_quantity = 6;
+  string minimum_notional = 7;
+  bool active = 8;
+}
+
+message ListInstrumentsResponse {
+  repeated Instrument instruments = 1;
+}
+
+message GetCapabilitiesRequest {
+  Exchange exchange = 1;
+  MarketKind market_kind = 2;
+}
+
+message ExchangeCapabilities {
+  bool market_order = 1;
+  bool limit_order = 2;
+  bool post_only = 3;
+  bool reduce_only = 4;
+  bool client_order_id = 5;
+  bool private_order_stream = 6;
+  bool amend_order = 7;
+}
+
+message GetOrderBookRequest {
+  InstrumentKey instrument = 1;
+  uint32 depth = 2;
+}
+
+message BookLevel {
+  string price = 1;
+  string quantity = 2;
+}
+
+message OrderBook {
+  InstrumentKey instrument = 1;
+  repeated BookLevel bids = 2;
+  repeated BookLevel asks = 3;
+  int64 exchange_time_ms = 4;
+  int64 gateway_received_at_ms = 5;
+  string sequence = 6;
+}
+
+message StreamTradesRequest {
+  InstrumentKey instrument = 1;
+}
+
+message Trade {
+  string event_id = 1;
+  InstrumentKey instrument = 2;
+  string exchange_trade_id = 3;
+  string price = 4;
+  string quantity = 5;
+  Side taker_side = 6;
+  int64 exchange_time_ms = 7;
+  int64 gateway_received_at_ms = 8;
+}
+
+message GetBalancesRequest {
+  AccountRef account = 1;
+}
+
+message Balance {
+  string asset = 1;
+  string free = 2;
+  string used = 3;
+  string total = 4;
+}
+
+message GetBalancesResponse {
+  repeated Balance balances = 1;
+  int64 observed_at_ms = 2;
+}
+
+message GetPositionsRequest {
+  AccountRef account = 1;
+}
+
+message Position {
+  InstrumentKey instrument = 1;
+  string quantity = 2;
+  string entry_price = 3;
+  string unrealized_pnl = 4;
+  int64 observed_at_ms = 5;
+}
+
+message GetPositionsResponse {
+  repeated Position positions = 1;
+}
+
+message GetOpenOrdersRequest {
+  AccountRef account = 1;
+  optional InstrumentKey instrument = 2;
+}
+
+message GetOpenOrdersResponse {
+  repeated Order orders = 1;
+}
+
+message GetOrderRequest {
+  AccountRef account = 1;
+  optional string exchange_order_id = 2;
+  optional string client_order_id = 3;
+}
+
+message CreateOrderRequest {
+  string request_id = 1;
+  AccountRef account = 2;
+  InstrumentKey instrument = 3;
+  string client_order_id = 4;
+  Side side = 5;
+  OrderType order_type = 6;
+  string quantity = 7;
+  optional string price = 8;
+  bool reduce_only = 9;
+  bool post_only = 10;
+  int64 deadline_ms = 11;
+}
+
+message CancelOrderRequest {
+  string request_id = 1;
+  AccountRef account = 2;
+  InstrumentKey instrument = 3;
+  optional string exchange_order_id = 4;
+  optional string client_order_id = 5;
+  int64 deadline_ms = 6;
+}
+
+message OrderSubmission {
+  string request_id = 1;
+  string client_order_id = 2;
+  optional string exchange_order_id = 3;
+  OrderStatus status = 4;
+  int64 gateway_time_ms = 5;
+  optional string raw_status = 6;
+}
+
+message Order {
+  string event_id = 1;
+  AccountRef account = 2;
+  InstrumentKey instrument = 3;
+  string client_order_id = 4;
+  string exchange_order_id = 5;
+  Side side = 6;
+  OrderType order_type = 7;
+  OrderStatus status = 8;
+  string quantity = 9;
+  string filled_quantity = 10;
+  optional string price = 11;
+  string raw_status = 12;
+  int64 exchange_time_ms = 13;
+  int64 gateway_received_at_ms = 14;
+}
+
+message StreamAccountRequest {
+  AccountRef account = 1;
+}
+
+message Fill {
+  string event_id = 1;
+  AccountRef account = 2;
+  InstrumentKey instrument = 3;
+  string exchange_trade_id = 4;
+  string exchange_order_id = 5;
+  string client_order_id = 6;
+  Side side = 7;
+  string price = 8;
+  string quantity = 9;
+  string fee = 10;
+  string fee_asset = 11;
+  int64 exchange_time_ms = 12;
+  int64 gateway_received_at_ms = 13;
+}

@@ -262,23 +262,42 @@ pub async fn mark_task_state(
     next_tick_at: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
     let mut transaction = pool.begin().await?;
+    let current = sqlx::query(
+        r#"
+        SELECT status, paused_reason
+        FROM execution_tasks
+        WHERE id = $1
+          AND status IN ('scheduled', 'running', 'paused', 'cancelling')
+        FOR UPDATE
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some(current) = current else {
+        transaction.commit().await?;
+        return Ok(());
+    };
+    let previous_status: String = current.try_get("status")?;
+    let previous_reason: Option<String> = current.try_get("paused_reason")?;
+    let state_changed = previous_status != status || previous_reason.as_deref() != reason;
     let updated = sqlx::query(
         r#"
         UPDATE execution_tasks
         SET status = $2, paused_reason = $3, next_tick_at = $4,
             started_at = CASE WHEN $2 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
-            version = version + 1, updated_at = now()
+            version = version + $5, updated_at = now()
         WHERE id = $1
-          AND status IN ('scheduled', 'running', 'paused', 'cancelling')
         "#,
     )
     .bind(id)
     .bind(status)
     .bind(reason)
     .bind(next_tick_at)
+    .bind(if state_changed { 1_i32 } else { 0_i32 })
     .execute(&mut *transaction)
     .await?;
-    if updated.rows_affected() > 0 {
+    if state_changed && updated.rows_affected() > 0 {
         sqlx::query(
             r#"
             INSERT INTO execution_events (event_id, task_id, event_type, payload)
@@ -363,8 +382,73 @@ pub async fn list_events_after(
     rows.iter().map(row_to_event).collect()
 }
 
+pub async fn list_task_events(
+    pool: &DatabasePool,
+    task_id: Uuid,
+    limit: i64,
+) -> Result<Vec<StoredExecutionEvent>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT * FROM (
+            SELECT * FROM execution_events
+            WHERE task_id = $1
+            ORDER BY sequence DESC
+            LIMIT $2
+        ) latest
+        ORDER BY sequence
+        "#,
+    )
+    .bind(task_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_event).collect()
+}
+
+pub async fn defer_task_tick(
+    pool: &DatabasePool,
+    task_id: Uuid,
+    next_tick_at: DateTime<Utc>,
+    payload: serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE execution_tasks
+        SET status = 'running', paused_reason = NULL, next_tick_at = $2,
+            started_at = COALESCE(started_at, now()), version = version + 1, updated_at = now()
+        WHERE id = $1 AND status IN ('scheduled', 'running', 'paused')
+        "#,
+    )
+    .bind(task_id)
+    .bind(next_tick_at)
+    .execute(&mut *transaction)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO execution_events (event_id, task_id, event_type, payload)
+        VALUES ($1, $2, 'slice_deferred', $3)
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(task_id)
+    .bind(payload)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 pub async fn record_slice(pool: &DatabasePool, slice: SliceRecord) -> Result<(), sqlx::Error> {
     let mut transaction = pool.begin().await?;
+    let previous_status: String =
+        sqlx::query_scalar("SELECT status FROM execution_tasks WHERE id = $1 FOR UPDATE")
+            .bind(slice.task_id)
+            .fetch_one(&mut *transaction)
+            .await?;
     let slice_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -433,6 +517,19 @@ pub async fn record_slice(pool: &DatabasePool, slice: SliceRecord) -> Result<(),
     }))
     .execute(&mut *transaction)
     .await?;
+    if previous_status != slice.task_status {
+        sqlx::query(
+            r#"
+            INSERT INTO execution_events (event_id, task_id, event_type, payload)
+            VALUES ($1, $2, 'task_state_changed', $3)
+            "#,
+        )
+        .bind(Uuid::now_v7())
+        .bind(slice.task_id)
+        .bind(serde_json::json!({ "status": slice.task_status, "reason": null }))
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
     Ok(())
 }

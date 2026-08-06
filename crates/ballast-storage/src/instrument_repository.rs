@@ -94,6 +94,59 @@ pub async fn list_instruments(pool: &DatabasePool) -> Result<Vec<StoredInstrumen
     rows.iter().map(row_to_instrument).collect()
 }
 
+pub async fn list_instruments_page(
+    pool: &DatabasePool,
+    exchange: Option<Exchange>,
+    market_kind: Option<MarketKind>,
+    active_only: bool,
+    search: Option<&str>,
+    ids: Option<&[Uuid]>,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<StoredInstrument>, i64), sqlx::Error> {
+    let exchange = exchange.map(exchange_text);
+    let market_kind = market_kind.map(market_kind_text);
+    let search = search.map(str::trim).filter(|value| !value.is_empty());
+    let ids = ids.filter(|value| !value.is_empty());
+    let rows = sqlx::query(
+        r#"
+        SELECT *, COUNT(*) OVER()::bigint AS total_count
+        FROM instruments
+        WHERE ($1::text IS NULL OR exchange = $1)
+          AND ($2::text IS NULL OR market_kind = $2)
+          AND (NOT $3 OR active)
+          AND (
+              $4::text IS NULL
+              OR symbol ILIKE '%' || $4 || '%'
+              OR exchange_symbol ILIKE '%' || $4 || '%'
+              OR base_asset ILIKE '%' || $4 || '%'
+              OR quote_asset ILIKE '%' || $4 || '%'
+          )
+          AND ($5::uuid[] IS NULL OR id = ANY($5))
+        ORDER BY exchange, market_kind, symbol
+        LIMIT $6 OFFSET $7
+        "#,
+    )
+    .bind(exchange)
+    .bind(market_kind)
+    .bind(active_only)
+    .bind(search)
+    .bind(ids)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let total = rows
+        .first()
+        .map_or(0, |row| row.try_get("total_count").unwrap_or(0));
+    Ok((
+        rows.iter()
+            .map(row_to_instrument)
+            .collect::<Result<_, _>>()?,
+        total,
+    ))
+}
+
 pub async fn get_instrument(
     pool: &DatabasePool,
     id: Uuid,

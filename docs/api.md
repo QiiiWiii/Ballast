@@ -5,11 +5,25 @@
 ## 标的与交易所
 
 - `GET /api/v1/exchanges`
+- `GET /api/v1/exchanges/snapshots`
 - `GET /api/v1/exchanges/{exchange}`
 - `GET /api/v1/exchanges/{exchange}/health-events`
 - `GET /api/v1/exchanges/{exchange}/subscriptions`
-- `GET /api/v1/instruments?exchange=binance&market_kind=spot&active_only=true`
+- `GET /api/v1/instruments?exchange=binance&market_kind=spot&active_only=true&search=BTC&limit=100&offset=0`
 - `POST /api/v1/instruments/sync`
+
+标的接口始终分页返回 `{items,total,limit,offset}`，默认每页 100 条，单次最多 250 条。`search` 匹配统一 symbol、交易所原生 symbol、基础币和计价币；`ids` 接受逗号分隔 UUID，用于任务列表按需补齐标的信息。前端不得通过该接口一次下载完整标的库。
+
+标的同步逐家返回结果。单家公网不可用不会把其他交易所的成功结果回滚：
+
+```json
+{
+  "synchronized": {"okx": 1771, "gate_io": 3098, "bitget": 2040},
+  "failed": {"binance": "gateway_unavailable", "bybit": "gateway_unavailable"}
+}
+```
+
+失败的精确错误码通过交易所健康接口和健康事件查询；同步接口不返回上游错误正文。
 
 ## 执行任务
 
@@ -61,10 +75,18 @@
 
 允许窗口为 `24h`、`7d`、`30d`。跨标的指标使用任务完成比例和无权重滑点分位数，不把不同资产或数量单位直接相加。
 
+交易所状态中的 `health_query_latency_ms` 表示 Rust 服务完成当前健康与能力探测的耗时，不代表交易所 REST 请求的往返延迟。列表接口执行五家聚合探测，单交易所详情只探测目标 adapter；`/exchanges/snapshots` 返回最后一次已持久化的当前探测结果，不触发网关请求。升级后尚未重新探测的记录返回 `null`，前端显示为“—”，不会伪装为 `0ms`。交易所原生请求延迟尚未进入正式契约。
+
 ## 事件
 
 - `GET /api/v1/events?after_sequence=0&limit=500`
-- `GET /api/v1/ws?after_sequence=0`，升级为 WebSocket
+- `GET /api/v1/events?task_id=<uuid>&limit=1000`，读取单个任务最新的审计事件窗口，并按事件序号正序返回
+- `GET /api/v1/ws`，升级为 WebSocket；首次连接从当前最新事件开始
+- `GET /api/v1/ws?after_sequence=123`，从指定序号后补发断线期间事件
+
+WebSocket 建立后首先发送 `stream_ready`，其中 `data.after_sequence` 是服务端确认的游标。客户端必须保存该游标，并在重连时显式传回；执行事件补发完成后应合并刷新页面数据，不能为每条历史事件分别触发全量请求。
+
+`market_health` 是读取 PostgreSQL 健康快照的轻量心跳，不触发网关健康或能力重查。运营控制舱同样读取数据库快照，不因刷新运营指标而调用五家能力接口。切片低于最小交易限制、但任务总残余仍可继续执行时会写入 `slice_deferred` 事件，明确记录延后原因和最小限制。
 
 错误示例：
 

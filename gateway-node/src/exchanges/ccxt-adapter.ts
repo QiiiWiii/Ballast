@@ -111,11 +111,11 @@ export function normalizeInstrument(
     quoteAsset: requiredText(market.quote, "market.quote"),
     settleAsset: optionalText(market.settle),
     contractKind,
-    contractSize: optionalDecimal(market.contractSize),
+    contractSize: optionalPositiveDecimal(market.contractSize),
     priceTick,
     quantityStep,
-    minimumQuantity: optionalDecimal(market.limits.amount?.min),
-    minimumNotional: optionalDecimal(market.limits.cost?.min),
+    minimumQuantity: optionalPositiveDecimal(market.limits.amount?.min),
+    minimumNotional: optionalPositiveDecimal(market.limits.cost?.min),
     makerFeeRate: optionalDecimal(market.maker),
     takerFeeRate: optionalDecimal(market.taker),
     active: market.active !== false,
@@ -213,6 +213,12 @@ function optionalDecimal(value: unknown): string | undefined {
   const decimal = new Decimal(value as Decimal.Value);
   if (!decimal.isFinite()) return undefined;
   return decimal.toFixed();
+}
+
+function optionalPositiveDecimal(value: unknown): string | undefined {
+  const normalized = optionalDecimal(value);
+  if (normalized === undefined || new Decimal(normalized).lte(0)) return undefined;
+  return normalized;
 }
 
 function compactOptional<T extends Record<string, unknown>>(value: T): T {

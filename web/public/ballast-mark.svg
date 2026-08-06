@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-labelledby="title desc">
+  <title id="title">Ballast 压舱石标志</title>
+  <desc id="desc">水平载荷线、中央龙骨和底部压舱块组成的几何标志</desc>
+  <rect width="40" height="40" rx="4" fill="#07171c"/>
+  <path d="M3 17.5h34" fill="none" stroke="#7fb4bd" stroke-width="1.5"/>
+  <path d="M5 10h10v5H5zm20 0h10v5H25z" fill="#4c9baa"/>
+  <path d="M18.5 5h3v24h-3z" fill="#f4f8f7"/>
+  <path d="M13 27h14l-3.5 8h-7z" fill="#cb8d54"/>
+</svg>

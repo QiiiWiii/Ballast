@@ -8,7 +8,7 @@ mod strategy_repository;
 mod task_repository;
 
 pub use instrument_repository::{
-    StoredInstrument, get_instrument, list_instruments, upsert_instruments,
+    StoredInstrument, get_instrument, list_instruments, list_instruments_page, upsert_instruments,
 };
 pub use live_repository::{
     StoredAccount, StoredRiskDecision, StoredTaskApproval, approve_task, list_accounts,
@@ -22,9 +22,9 @@ pub use strategy_repository::{
 };
 pub use task_repository::{
     NewExecutionTask, SliceRecord, StoredExecutionEvent, StoredExecutionSlice, StoredExecutionTask,
-    cancel_task, claim_runnable_tasks, create_task, get_task, list_events_after,
-    list_runnable_tasks, list_slices, list_tasks, mark_task_state, next_slice_sequence,
-    record_slice,
+    cancel_task, claim_runnable_tasks, create_task, defer_task_tick, get_task, list_events_after,
+    list_runnable_tasks, list_slices, list_task_events, list_tasks, mark_task_state,
+    next_slice_sequence, record_slice,
 };
 
 pub type DatabasePool = sqlx::PgPool;

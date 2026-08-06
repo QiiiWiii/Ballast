@@ -36,4 +36,14 @@ docker compose -f deploy/compose.yaml config
 docker compose -f deploy/compose.yaml up --build
 ```
 
-容器启动不代表交易所功能可用。当前网关只有健康检查，其他方法会返回 `UNIMPLEMENTED`。
+容器启动不代表每家交易所公网功能都可用。当前网关已实现五家公共标的、REST 盘口、WebSocket 盘口和逐笔成交；实际可用性仍受开发机出口地域、交易所限频和交易所维护状态影响。使用 `/api/v1/exchanges` 查看真实健康状态，不得把 `degraded` 静默改写为可用。
+
+公共标的同步允许部分成功：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/instruments/sync \
+  -H 'Content-Type: application/json' \
+  -d '{"reload":true}'
+```
+
+纸面执行会读取任务绑定交易所的实时公共盘口，但不会调用任何真实下单接口。

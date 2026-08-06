@@ -45,6 +45,17 @@ test("missing precision fails explicitly", () => {
   assert.throws(() => normalizeInstrument("bitget", decimalPlacesClient, marketFixture({ spot: true, missingPrecision: true })), /precision is unavailable/);
 });
 
+test("non-positive optional trading limits are treated as unavailable", () => {
+  const instrument = normalizeInstrument(
+    "gate_io",
+    decimalPlacesClient,
+    marketFixture({ spot: true, zeroLimits: true }),
+  );
+
+  assert.equal(instrument.minimumQuantity, undefined);
+  assert.equal(instrument.minimumNotional, undefined);
+});
+
 function marketFixture(options: {
   spot?: boolean;
   swap?: boolean;
@@ -52,6 +63,7 @@ function marketFixture(options: {
   inverse?: boolean;
   settle?: string;
   missingPrecision?: boolean;
+  zeroLimits?: boolean;
 }): CcxtMarket {
   return {
     id: "BTCUSDT",
@@ -65,7 +77,9 @@ function marketFixture(options: {
     inverse: options.inverse,
     contractSize: options.swap ? 1 : undefined,
     precision: options.missingPrecision ? {} : { price: 1, amount: 3 },
-    limits: { amount: { min: 0.001 }, cost: { min: 5 } },
+    limits: options.zeroLimits
+      ? { amount: { min: 0 }, cost: { min: 0 } }
+      : { amount: { min: 0.001 }, cost: { min: 5 } },
     maker: 0.0002,
     taker: 0.0005,
     active: true,

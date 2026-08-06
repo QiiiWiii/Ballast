@@ -15,9 +15,26 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
     };
     let pool = ballast_storage::connect(&database_url).await.unwrap();
     ballast_storage::migrate(&pool).await.unwrap();
+    let has_current_health_latency: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'exchange_health'
+              AND column_name = 'request_latency_ms'
+              AND is_nullable = 'YES'
+        )
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(has_current_health_latency);
+    let test_suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    let symbol = format!("BTC/USDT-TEST-{test_suffix}");
     let instrument = Instrument {
-        id: InstrumentId::new(Exchange::Binance, MarketKind::Spot, "BTC/USDT").unwrap(),
-        exchange_symbol: "BTCUSDT".to_owned(),
+        id: InstrumentId::new(Exchange::Binance, MarketKind::Spot, &symbol).unwrap(),
+        exchange_symbol: format!("BTCUSDTTEST{test_suffix}"),
         base_asset: "BTC".to_owned(),
         quote_asset: "USDT".to_owned(),
         settle_asset: None,
@@ -34,6 +51,20 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
     let stored = ballast_storage::upsert_instruments(&pool, &[instrument])
         .await
         .unwrap();
+    let (instrument_page, total) = ballast_storage::list_instruments_page(
+        &pool,
+        Some(Exchange::Binance),
+        Some(MarketKind::Spot),
+        true,
+        Some(&symbol),
+        None,
+        10,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(instrument_page[0].id, stored[0].id);
     let start_at = Utc::now();
     let (template, template_version) = ballast_storage::create_strategy_template(
         &pool,
@@ -144,11 +175,82 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
     .unwrap();
     let slices = ballast_storage::list_slices(&pool, first.id).await.unwrap();
     assert_eq!(slices.len(), 1);
-    let events = ballast_storage::list_events_after(&pool, 0, 20)
+    let events = ballast_storage::list_events_after(&pool, 0, 10_000)
         .await
         .unwrap();
-    assert_eq!(events.len(), 2);
+    let events: Vec<_> = events
+        .into_iter()
+        .filter(|event| event.task_id == Some(first.id))
+        .collect();
+    assert_eq!(events.len(), 3);
     assert!(events[0].sequence < events[1].sequence);
+    assert!(events[1].sequence < events[2].sequence);
+    assert_eq!(events[0].event_type, "task_created");
+    assert_eq!(events[1].event_type, "slice_recorded");
+    assert_eq!(events[2].event_type, "task_state_changed");
+    assert_eq!(events[2].payload["status"], "running");
+
+    let deferred_tick = start_at + Duration::milliseconds(1500);
+    ballast_storage::defer_task_tick(
+        &pool,
+        first.id,
+        deferred_tick,
+        serde_json::json!({ "reason": "below_minimum_slice" }),
+    )
+    .await
+    .unwrap();
+    let latest_events = ballast_storage::list_task_events(&pool, first.id, 2)
+        .await
+        .unwrap();
+    assert_eq!(latest_events.len(), 2);
+    assert_eq!(latest_events[0].event_type, "task_state_changed");
+    assert_eq!(latest_events[1].event_type, "slice_deferred");
+    assert!(latest_events[0].sequence < latest_events[1].sequence);
+
+    let first_pause_tick = start_at + Duration::seconds(2);
+    ballast_storage::mark_task_state(
+        &pool,
+        first.id,
+        "paused",
+        Some("order_book_unavailable"),
+        first_pause_tick,
+    )
+    .await
+    .unwrap();
+    let paused = ballast_storage::get_task(&pool, first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let repeated_pause_tick = start_at + Duration::seconds(3);
+    ballast_storage::mark_task_state(
+        &pool,
+        first.id,
+        "paused",
+        Some("order_book_unavailable"),
+        repeated_pause_tick,
+    )
+    .await
+    .unwrap();
+    let repeated = ballast_storage::get_task(&pool, first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(repeated.version, paused.version);
+    assert_eq!(
+        repeated.next_tick_at.timestamp_micros(),
+        repeated_pause_tick.timestamp_micros()
+    );
+    let pause_events = ballast_storage::list_events_after(&pool, 0, 10_000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event.task_id == Some(first.id)
+                && event.event_type == "task_state_changed"
+                && event.payload["status"] == "paused"
+        })
+        .count();
+    assert_eq!(pause_events, 1);
     assert!(ballast_storage::cancel_task(&pool, first.id).await.unwrap());
     assert!(!ballast_storage::cancel_task(&pool, first.id).await.unwrap());
     assert!(
@@ -161,4 +263,35 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
             .await
             .unwrap()
     );
+
+    sqlx::query("DELETE FROM execution_events WHERE task_id = $1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM execution_slices WHERE task_id = $1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM execution_tasks WHERE id = $1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM strategy_template_versions WHERE template_id = $1")
+        .bind(template.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM strategy_templates WHERE id = $1")
+        .bind(template.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM instruments WHERE id = $1")
+        .bind(stored[0].id)
+        .execute(&pool)
+        .await
+        .unwrap();
 }

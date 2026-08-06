@@ -11,6 +11,22 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: ballast_test
+          POSTGRES_USER: ballast
+          POSTGRES_PASSWORD: ballast_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ballast -d ballast_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://ballast:ballast_test@127.0.0.1:5432/ballast_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
@@ -34,9 +50,32 @@ jobs:
         working-directory: gateway-node
       - run: npm run check
         working-directory: gateway-node
+      - run: git diff --exit-code -- gateway-node/src/generated
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run check
+        working-directory: web
 
   deployment-config:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker compose -f deploy/compose.yaml config --quiet
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/gateway.Dockerfile -t ballast-gateway:ci .
+      - run: docker build -f deploy/server.Dockerfile -t ballast-server:ci .
+      - run: docker build -f deploy/web.Dockerfile -t ballast-web:ci .

@@ -5,5 +5,5 @@ mod instrument;
 mod task;
 
 pub use error::DomainError;
-pub use instrument::{Exchange, Instrument, InstrumentId, MarketKind};
-pub use task::{ExecutionIntent, ExecutionTaskId, Side, StrategyKind};
+pub use instrument::{ContractKind, Exchange, Instrument, InstrumentId, MarketKind};
+pub use task::{ExecutionIntent, ExecutionTaskId, QuantityUnit, Side, StrategyKind, TargetAmount};

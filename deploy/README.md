@@ -1,19 +1,20 @@
-# Deployment
-
-`compose.yaml` 只用于本地开发和早期集成验证，不是生产部署方案。
+# Compose 部署
 
 ```bash
-docker compose -f deploy/compose.yaml up --build
+cp .env.example .env
+docker compose -f deploy/compose.yaml up --build -d
 docker compose -f deploy/compose.yaml down
 ```
 
-本地 PostgreSQL 使用公开的开发凭证 `ballast/ballast`。任何共享或生产环境都必须替换凭证，并通过 secret manager 注入交易所 API Key。
+默认入口为 `http://localhost:8080`。PostgreSQL、gRPC 和 Prometheus 不映射宿主机端口。
 
-生产部署在具备真实下单能力前还需要：
+共享环境至少修改：
 
-- 独立数据库备份与恢复演练；
-- Rust 服务与各交易所网关的单独部署单元；
-- mTLS 或等价的内部 RPC 身份验证；
-- 出站网络白名单；
-- 审计日志、告警和人工熔断入口；
-- API Key 权限分级与轮换。
+- `POSTGRES_PASSWORD`
+- `BALLAST_PUBLIC_ORIGIN`
+- `BALLAST_WEB_PORT`
+- `BACKUP_RETENTION_DAYS`
+
+交易所 API Key 当前不受支持，不应放入 `.env`。私有账户阶段必须使用 secrets 文件或外部 secret manager。
+
+`BALLAST_LIVE_ENABLED` 固定为 `false`。即使手工改成 `true`，Rust 服务也会在 OIDC 验签、私有对账与风控实现完成前拒绝启动。生产阶段将按交易所拆分五个网关进程；当前共享环境仍只运行无密钥的公共行情网关。

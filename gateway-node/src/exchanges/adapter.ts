@@ -1,7 +1,8 @@
 export type DecimalText = string;
-
 export type ExchangeId = "binance" | "okx" | "bybit" | "gate_io" | "bitget";
-export type MarketKind = "spot" | "perpetual" | "future";
+export type MarketKind = "spot" | "perpetual";
+export type ContractKind = "linear" | "inverse";
+export type TradeSide = "buy" | "sell" | "unknown";
 
 export interface InstrumentKey {
   readonly exchange: ExchangeId;
@@ -11,31 +12,63 @@ export interface InstrumentKey {
 
 export interface Instrument {
   readonly key: InstrumentKey;
+  readonly exchangeSymbol: string;
   readonly baseAsset: string;
   readonly quoteAsset: string;
+  readonly settleAsset?: string;
+  readonly contractKind?: ContractKind;
+  readonly contractSize?: DecimalText;
   readonly priceTick: DecimalText;
   readonly quantityStep: DecimalText;
-  readonly minimumQuantity: DecimalText;
-  readonly minimumNotional: DecimalText;
+  readonly minimumQuantity?: DecimalText;
+  readonly minimumNotional?: DecimalText;
+  readonly makerFeeRate?: DecimalText;
+  readonly takerFeeRate?: DecimalText;
   readonly active: boolean;
 }
 
 export interface ExchangeCapabilities {
-  readonly marketOrder: boolean;
-  readonly limitOrder: boolean;
-  readonly postOnly: boolean;
-  readonly reduceOnly: boolean;
-  readonly clientOrderId: boolean;
-  readonly privateOrderStream: boolean;
-  readonly amendOrder: boolean;
+  readonly exchange: ExchangeId;
+  readonly spot: boolean;
+  readonly perpetualLinear: boolean;
+  readonly perpetualInverse: boolean;
+  readonly fetchOrderBook: boolean;
+  readonly watchOrderBook: boolean;
+  readonly watchTrades: boolean;
 }
 
-export interface ExchangeAdapter {
+export interface BookLevel {
+  readonly price: DecimalText;
+  readonly quantity: DecimalText;
+}
+
+export interface OrderBook {
+  readonly instrument: InstrumentKey;
+  readonly bids: readonly BookLevel[];
+  readonly asks: readonly BookLevel[];
+  readonly exchangeTimeMs: number;
+  readonly gatewayReceivedAtMs: number;
+  readonly sequence?: string;
+}
+
+export interface Trade {
+  readonly eventId: string;
+  readonly instrument: InstrumentKey;
+  readonly exchangeTradeId: string;
+  readonly price: DecimalText;
+  readonly quantity: DecimalText;
+  readonly takerSide: TradeSide;
+  readonly exchangeTimeMs: number;
+  readonly gatewayReceivedAtMs: number;
+}
+
+export interface MarketDataAdapter {
   readonly exchange: ExchangeId;
 
-  loadInstruments(marketKind: MarketKind): Promise<readonly Instrument[]>;
-  capabilities(marketKind: MarketKind): ExchangeCapabilities;
+  listInstruments(reload: boolean): Promise<readonly Instrument[]>;
+  capabilities(): Promise<ExchangeCapabilities>;
+  getOrderBook(instrument: InstrumentKey, depth: number): Promise<OrderBook>;
+  watchOrderBook(instrument: InstrumentKey, depth: number): Promise<OrderBook>;
+  watchTrades(instrument: InstrumentKey): Promise<readonly Trade[]>;
+  close(): Promise<void>;
 }
-
-// Implementations are intentionally added one exchange at a time. The gateway
-// must not expose a generic `callCcxt(method, params)` escape hatch.

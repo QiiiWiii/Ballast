@@ -1,3 +1,4 @@
+pub use barter_instrument::Side;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -28,16 +29,24 @@ impl Default for ExecutionTaskId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Side {
-    Buy,
-    Sell,
+pub enum StrategyKind {
+    Twap,
+    Pov,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum StrategyKind {
-    Twap,
-    Pov,
+pub enum QuantityUnit {
+    BaseQuantity,
+    QuoteNotional,
+    Contracts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetAmount {
+    #[serde(with = "rust_decimal::serde::str")]
+    pub amount: Decimal,
+    pub unit: QuantityUnit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,8 +56,7 @@ pub struct ExecutionIntent {
     pub instrument: InstrumentId,
     pub side: Side,
     pub strategy: StrategyKind,
-    #[serde(with = "rust_decimal::serde::str")]
-    pub target_quantity: Decimal,
+    pub target: TargetAmount,
 }
 
 impl ExecutionIntent {
@@ -57,9 +65,9 @@ impl ExecutionIntent {
         instrument: InstrumentId,
         side: Side,
         strategy: StrategyKind,
-        target_quantity: Decimal,
+        target: TargetAmount,
     ) -> Result<Self, DomainError> {
-        if target_quantity <= Decimal::ZERO {
+        if target.amount <= Decimal::ZERO {
             return Err(DomainError::NonPositiveQuantity);
         }
 
@@ -69,7 +77,7 @@ impl ExecutionIntent {
             instrument,
             side,
             strategy,
-            target_quantity,
+            target,
         })
     }
 }

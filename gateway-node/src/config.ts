@@ -1,6 +1,8 @@
 export interface GatewayConfig {
   readonly bind: string;
   readonly logLevel: string;
+  readonly exchangeTimeoutMs: number;
+  readonly streamStaleAfterMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
@@ -15,5 +17,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
   return {
     bind,
     logLevel: env.LOG_LEVEL ?? "info",
+    exchangeTimeoutMs: positiveInteger(env.EXCHANGE_TIMEOUT_MS, 15_000),
+    streamStaleAfterMs: positiveInteger(env.STREAM_STALE_AFTER_MS, 30_000),
   };
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`expected a positive integer, received: ${value}`);
+  }
+  return parsed;
 }

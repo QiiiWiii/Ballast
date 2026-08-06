@@ -6,4 +6,10 @@ pub enum DomainError {
     NonPositiveQuantity,
     #[error("instrument field `{0}` must not be empty")]
     EmptyInstrumentField(&'static str),
+    #[error("price must be greater than zero")]
+    NonPositivePrice,
+    #[error("instrument metadata is incomplete: {0}")]
+    IncompleteInstrument(&'static str),
+    #[error("quantity unit is not supported for this market")]
+    UnsupportedQuantityUnit,
 }

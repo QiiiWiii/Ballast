@@ -34,8 +34,8 @@ mod tests {
     fn slice_is_capped_by_remaining_quantity() {
         let strategy = Pov::new(Decimal::new(2, 1)).expect("valid participation rate");
         let input = StrategyTickInput {
-            target_quantity: Decimal::new(10, 0),
-            executed_quantity: Decimal::new(9, 0),
+            target_amount: Decimal::new(10, 0),
+            executed_amount: Decimal::new(9, 0),
             market_volume: Decimal::new(20, 0),
             elapsed_ticks: 0,
             total_ticks: 1,

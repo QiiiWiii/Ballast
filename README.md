@@ -4,7 +4,7 @@ Ballast 是一个面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易�
 
 项目采用混合架构：Rust 负责策略、执行状态机、风险控制、持久化与对冲编排；Node.js/ccxt 网关负责交易所协议、认证、限频和行情/订单流连接。两者通过版本化的 gRPC/Protobuf 契约通信。
 
-> 当前状态：项目骨架。尚未接入真实交易所，也不具备真实下单能力。
+> 当前状态：五家公共行情、版本化策略模板、真实行情驱动的纸面执行和运营工作台已实现；私有账户/IOC/原生算法协议与数据库事实已建立，但运行时安全锁定，不读取密钥，也不具备真实下单能力。
 
 ## 目录
 
@@ -23,7 +23,7 @@ Ballast 是一个面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易�
 ├── migrations/              # PostgreSQL 迁移
 ├── deploy/                  # Docker 与 Compose 部署文件
 ├── docs/                    # 架构、开发和部署文档
-└── web/                     # 前端预留目录
+└── web/                     # React 中英文运营与管理工作台
 ```
 
 ## 本地检查
@@ -34,20 +34,16 @@ Ballast 是一个面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易�
 make check
 ```
 
-启动本地 PostgreSQL、交易所网关和 Rust 服务：
+启动完整本地环境：
 
 ```bash
 cp .env.example .env
 docker compose -f deploy/compose.yaml up --build
 ```
 
-服务入口：
+打开 `http://localhost:8080`。数据库和 gRPC 网关只在 Compose 网络内可达；先在“市场与通道”页同步标的，在“策略中心”创建模板，再创建纸面任务。
 
-- Rust API：`http://localhost:8080/health`
-- Node gRPC 网关：`localhost:50051`
-- PostgreSQL：`localhost:5432`
-
-更多信息见 [docs/README.md](docs/README.md)。
+更多信息见 [架构](docs/architecture.md)、[HTTP API](docs/api.md) 和 [交易所能力矩阵](docs/exchange-capabilities.md)。
 
 ## 安全边界
 
@@ -55,3 +51,4 @@ docker compose -f deploy/compose.yaml up --build
 - API Key 不得写入仓库、数据库、日志或错误信息。
 - Node 网关不拥有策略、任务状态和风险决策。
 - 任何状态不确定的下单请求都必须先对账，不得盲目重试。
+- `BALLAST_LIVE_ENABLED` 默认 false；当前实现检测到 true 会拒绝启动。

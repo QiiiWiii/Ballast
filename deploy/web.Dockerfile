@@ -1,0 +1,12 @@
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web ./
+RUN npm run build
+
+FROM nginx:1.29-alpine
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/web/dist /usr/share/nginx/html
+EXPOSE 80

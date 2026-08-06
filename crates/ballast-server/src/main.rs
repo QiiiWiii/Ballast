@@ -2,12 +2,22 @@
 
 use std::net::SocketAddr;
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderName, HeaderValue, Method, StatusCode, header},
+    routing::get,
+};
+use ballast_gateway_client::GatewayClient;
 use ballast_storage::DatabasePool;
 use serde::Serialize;
-use tower_http::trace::TraceLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+mod api;
+mod execution_worker;
+mod metrics;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -17,8 +27,10 @@ struct HealthResponse {
 }
 
 #[derive(Clone)]
-struct AppState {
+pub(crate) struct AppState {
     database: DatabasePool,
+    gateway: GatewayClient,
+    metrics: metrics::AppMetrics,
 }
 
 #[tokio::main]
@@ -29,17 +41,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    if std::env::var("BALLAST_LIVE_ENABLED").is_ok_and(|value| value == "true") {
+        return Err("live execution cannot start before OIDC verification and private reconciliation are implemented".into());
+    }
+
     let bind = std::env::var("BALLAST_SERVER_BIND")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
         .parse::<SocketAddr>()?;
     let database_url = std::env::var("DATABASE_URL")?;
     let database = ballast_storage::connect(&database_url).await?;
     ballast_storage::migrate(&database).await?;
+    let gateway_endpoint = std::env::var("BALLAST_GATEWAY_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:50051".to_owned());
+    let gateway = GatewayClient::connect(gateway_endpoint).await?;
+    let metrics = metrics::AppMetrics::new()?;
+    let trade_volume = execution_worker::TradeVolumeTracker::default();
+    execution_worker::spawn_worker(
+        database.clone(),
+        gateway.clone(),
+        trade_volume,
+        metrics.clone(),
+    );
+
+    let cors_origin = std::env::var("BALLAST_CORS_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:5173".to_owned())
+        .parse::<HeaderValue>()?;
+    let cors = CorsLayer::new()
+        .allow_origin(cors_origin)
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            HeaderName::from_static("idempotency-key"),
+        ]);
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics::endpoint))
+        .merge(api::routes())
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(AppState { database });
+        .with_state(AppState {
+            database,
+            gateway,
+            metrics,
+        });
     let listener = tokio::net::TcpListener::bind(bind).await?;
 
     info!(%bind, "ballast server listening");

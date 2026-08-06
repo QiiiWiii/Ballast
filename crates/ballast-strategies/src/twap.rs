@@ -30,8 +30,8 @@ mod tests {
     #[test]
     fn final_tick_consumes_exact_remaining_quantity() {
         let input = StrategyTickInput {
-            target_quantity: Decimal::new(10, 0),
-            executed_quantity: Decimal::new(7, 0),
+            target_amount: Decimal::new(10, 0),
+            executed_amount: Decimal::new(7, 0),
             market_volume: Decimal::ZERO,
             elapsed_ticks: 9,
             total_ticks: 10,

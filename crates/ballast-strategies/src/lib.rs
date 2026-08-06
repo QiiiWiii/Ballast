@@ -11,8 +11,8 @@ pub use twap::Twap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StrategyTickInput {
-    pub target_quantity: Decimal,
-    pub executed_quantity: Decimal,
+    pub target_amount: Decimal,
+    pub executed_amount: Decimal,
     pub market_volume: Decimal,
     pub elapsed_ticks: u32,
     pub total_ticks: u32,
@@ -21,7 +21,7 @@ pub struct StrategyTickInput {
 impl StrategyTickInput {
     #[must_use]
     pub fn remaining_quantity(self) -> Decimal {
-        (self.target_quantity - self.executed_quantity).max(Decimal::ZERO)
+        (self.target_amount - self.executed_amount).max(Decimal::ZERO)
     }
 }
 

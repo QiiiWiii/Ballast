@@ -7,7 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "generate:proto": "proto-loader-gen-types --grpcLib=@grpc/grpc-js --outDir=src/generated ../proto/exchange_gateway.proto ../proto/private_gateway.proto",
+    "build": "npm run generate:proto && tsc -p tsconfig.json",
     "check": "npm run build && npm test",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
@@ -16,7 +17,7 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.13.4",
     "@grpc/proto-loader": "^0.7.15",
-    "ccxt": "^4.4.94",
+    "ccxt": "4.5.58",
     "decimal.js": "^10.6.0",
     "pino": "^9.7.0"
   },

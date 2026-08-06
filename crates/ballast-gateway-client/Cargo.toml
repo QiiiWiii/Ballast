@@ -7,7 +7,10 @@ publish.workspace = true
 build = "build.rs"
 
 [dependencies]
+ballast-core = { path = "../ballast-core" }
 prost.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true
 tonic.workspace = true
 
 [build-dependencies]

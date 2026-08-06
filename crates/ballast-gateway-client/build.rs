@@ -9,8 +9,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_client(true)
         .build_server(false)
-        .compile_protos(&["../../proto/exchange_gateway.proto"], &["../../proto"])?;
+        .compile_protos(
+            &[
+                "../../proto/exchange_gateway.proto",
+                "../../proto/private_gateway.proto",
+            ],
+            &["../../proto"],
+        )?;
 
     println!("cargo:rerun-if-changed=../../proto/exchange_gateway.proto");
+    println!("cargo:rerun-if-changed=../../proto/private_gateway.proto");
     Ok(())
 }

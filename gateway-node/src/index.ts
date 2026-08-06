@@ -5,7 +5,7 @@ import { startGrpcServer } from "./grpc/server.js";
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, name: "ballast-exchange-gateway" });
-const server = await startGrpcServer(config);
+const runtime = await startGrpcServer(config, logger);
 
 logger.info({ bind: config.bind }, "exchange gateway listening");
 
@@ -16,14 +16,14 @@ function shutdown(signal: NodeJS.Signals): void {
   }
   shuttingDown = true;
   logger.info({ signal }, "exchange gateway shutting down");
-  server.tryShutdown((error?: Error) => {
+  runtime.server.tryShutdown((error?: Error) => {
     if (error) {
       logger.error({ error }, "graceful shutdown failed");
-      server.forceShutdown();
+      runtime.server.forceShutdown();
       process.exitCode = 1;
       return;
     }
-    process.exitCode = 0;
+    void runtime.closeAdapters().finally(() => { process.exitCode = 0; });
   });
 }
 

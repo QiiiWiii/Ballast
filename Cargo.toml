@@ -19,8 +19,12 @@ repository = "https://github.com/QiiiWiii/Ballast"
 
 [workspace.dependencies]
 async-trait = "0.1"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+barter-instrument = "=0.3.1"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
 prost = "0.13"
+prometheus = "0.14"
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,13 +33,14 @@ sqlx = { version = "0.8", default-features = false, features = [
   "postgres",
   "migrate",
   "macros",
+  "chrono",
   "rust_decimal",
   "uuid",
 ] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tonic = "0.12"
-tower-http = { version = "0.6", features = ["request-id", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "request-id", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v7"] }

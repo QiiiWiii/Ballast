@@ -1,0 +1,317 @@
+syntax = "proto3";
+
+package ballast.gateway.v1;
+
+import "exchange_gateway.proto";
+
+service AccountService {
+  rpc GetAccountSnapshot(GetAccountSnapshotRequest) returns (AccountSnapshot);
+  rpc WatchAccountEvents(WatchAccountEventsRequest) returns (stream AccountEvent);
+}
+
+service TradingService {
+  rpc GetTradingCapabilities(GetTradingCapabilitiesRequest) returns (TradingCapabilities);
+  rpc PlaceIocOrder(PlaceIocOrderRequest) returns (OrderSnapshot);
+  rpc GetOrderByClientId(GetOrderByClientIdRequest) returns (OrderSnapshot);
+  rpc CancelOrder(CancelOrderRequest) returns (OrderSnapshot);
+  rpc WatchOrderEvents(WatchOrderEventsRequest) returns (stream OrderEvent);
+}
+
+service AlgorithmicTradingService {
+  rpc GetAlgoCapabilities(GetAlgoCapabilitiesRequest) returns (AlgoCapabilities);
+  rpc SubmitAlgoOrder(SubmitAlgoOrderRequest) returns (AlgoOrderSnapshot);
+  rpc GetAlgoOrder(GetAlgoOrderRequest) returns (AlgoOrderSnapshot);
+  rpc CancelAlgoOrder(CancelAlgoOrderRequest) returns (AlgoOrderSnapshot);
+  rpc ListAlgoSubOrders(ListAlgoSubOrdersRequest) returns (ListAlgoSubOrdersResponse);
+  rpc WatchAlgoEvents(WatchAlgoEventsRequest) returns (stream AlgoEvent);
+}
+
+enum AccountEnvironment {
+  ACCOUNT_ENVIRONMENT_UNSPECIFIED = 0;
+  ACCOUNT_ENVIRONMENT_DEMO = 1;
+  ACCOUNT_ENVIRONMENT_PRODUCTION = 2;
+}
+
+enum OrderState {
+  ORDER_STATE_UNSPECIFIED = 0;
+  ORDER_STATE_SUBMISSION_PENDING = 1;
+  ORDER_STATE_SUBMISSION_UNKNOWN = 2;
+  ORDER_STATE_OPEN = 3;
+  ORDER_STATE_PARTIALLY_FILLED = 4;
+  ORDER_STATE_FILLED = 5;
+  ORDER_STATE_CANCEL_PENDING = 6;
+  ORDER_STATE_CANCELLED = 7;
+  ORDER_STATE_REJECTED = 8;
+  ORDER_STATE_EXPIRED = 9;
+  ORDER_STATE_FAILED = 10;
+}
+
+enum AlgoOrderState {
+  ALGO_ORDER_STATE_UNSPECIFIED = 0;
+  ALGO_ORDER_STATE_SUBMISSION_PENDING = 1;
+  ALGO_ORDER_STATE_SUBMISSION_UNKNOWN = 2;
+  ALGO_ORDER_STATE_ACKNOWLEDGED = 3;
+  ALGO_ORDER_STATE_RUNNING = 4;
+  ALGO_ORDER_STATE_CANCELLING = 5;
+  ALGO_ORDER_STATE_COMPLETED = 6;
+  ALGO_ORDER_STATE_CANCELLED = 7;
+  ALGO_ORDER_STATE_EXPIRED = 8;
+  ALGO_ORDER_STATE_FAILED = 9;
+}
+
+message AccountRef {
+  string account_id = 1;
+  Exchange exchange = 2;
+  AccountEnvironment environment = 3;
+}
+
+message Balance {
+  string asset = 1;
+  string total = 2;
+  string available = 3;
+}
+
+message Position {
+  InstrumentKey instrument = 1;
+  string quantity = 2;
+  optional string entry_price = 3;
+  optional string mark_price = 4;
+  optional string unrealized_pnl = 5;
+}
+
+message GetAccountSnapshotRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+}
+
+message AccountSnapshot {
+  AccountRef account = 1;
+  repeated Balance balances = 2;
+  repeated Position positions = 3;
+  repeated OrderSnapshot open_orders = 4;
+  int64 exchange_time_ms = 5;
+  int64 gateway_received_at_ms = 6;
+}
+
+message WatchAccountEventsRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+}
+
+message AccountEvent {
+  string event_id = 1;
+  AccountRef account = 2;
+  oneof payload {
+    StreamStatus status = 3;
+    Balance balance = 4;
+    Position position = 5;
+    OrderSnapshot order = 6;
+    Fill fill = 7;
+  }
+  int64 gateway_received_at_ms = 8;
+}
+
+message GetTradingCapabilitiesRequest {
+  Exchange exchange = 1;
+}
+
+message TradingCapabilities {
+  Exchange exchange = 1;
+  bool place_ioc = 2;
+  bool query_by_client_order_id = 3;
+  bool cancel_order = 4;
+  bool private_order_stream = 5;
+  bool private_fill_stream = 6;
+}
+
+message PlaceIocOrderRequest {
+  AccountRef account = 1;
+  InstrumentKey instrument = 2;
+  string request_id = 3;
+  string client_order_id = 4;
+  Side side = 5;
+  string quantity = 6;
+  string limit_price = 7;
+}
+
+message GetOrderByClientIdRequest {
+  AccountRef account = 1;
+  InstrumentKey instrument = 2;
+  string request_id = 3;
+  string client_order_id = 4;
+}
+
+message CancelOrderRequest {
+  AccountRef account = 1;
+  InstrumentKey instrument = 2;
+  string request_id = 3;
+  string client_order_id = 4;
+}
+
+message WatchOrderEventsRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+}
+
+message OrderSnapshot {
+  AccountRef account = 1;
+  InstrumentKey instrument = 2;
+  string client_order_id = 3;
+  optional string exchange_order_id = 4;
+  OrderState state = 5;
+  Side side = 6;
+  string quantity = 7;
+  string filled_quantity = 8;
+  optional string average_price = 9;
+  optional string reason_code = 10;
+  int64 exchange_time_ms = 11;
+  int64 gateway_received_at_ms = 12;
+}
+
+message Fill {
+  string event_id = 1;
+  string exchange_trade_id = 2;
+  string client_order_id = 3;
+  string price = 4;
+  string quantity = 5;
+  optional string fee = 6;
+  optional string fee_asset = 7;
+  int64 exchange_time_ms = 8;
+}
+
+message OrderEvent {
+  oneof payload {
+    StreamStatus status = 1;
+    OrderSnapshot order = 2;
+    Fill fill = 3;
+  }
+}
+
+message GetAlgoCapabilitiesRequest {
+  Exchange exchange = 1;
+}
+
+message AlgoCapability {
+  string algorithm = 1;
+  MarketKind market_kind = 2;
+  bool submit = 3;
+  bool query = 4;
+  bool cancel = 5;
+  bool list_sub_orders = 6;
+  bool fill_reconciliation = 7;
+  bool protected_price = 8;
+  string validation_status = 9;
+  optional string reason_code = 10;
+}
+
+message AlgoCapabilities {
+  Exchange exchange = 1;
+  repeated AlgoCapability algorithms = 2;
+}
+
+message BinanceSpotTwapConfig {
+  int64 duration_seconds = 1;
+  string limit_price = 2;
+}
+
+message BinanceFuturesTwapConfig {
+  int64 duration_seconds = 1;
+  string limit_price = 2;
+  string position_side = 3;
+  bool reduce_only = 4;
+}
+
+message BinanceFuturesVpConfig {
+  string urgency = 1;
+  string limit_price = 2;
+  string position_side = 3;
+  bool reduce_only = 4;
+}
+
+message OkxTwapConfig {
+  string trade_mode = 1;
+  string position_side = 2;
+  string size_limit = 3;
+  string price_limit = 4;
+  int64 time_interval_seconds = 5;
+  oneof price_variance {
+    string price_variance_ratio = 6;
+    string price_spread = 7;
+  }
+  bool reduce_only = 8;
+}
+
+message SubmitAlgoOrderRequest {
+  AccountRef account = 1;
+  InstrumentKey instrument = 2;
+  string request_id = 3;
+  string client_algo_id = 4;
+  Side side = 5;
+  string quantity = 6;
+  oneof configuration {
+    BinanceSpotTwapConfig binance_spot_twap = 10;
+    BinanceFuturesTwapConfig binance_futures_twap = 11;
+    BinanceFuturesVpConfig binance_futures_vp = 12;
+    OkxTwapConfig okx_twap = 13;
+  }
+}
+
+message GetAlgoOrderRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+  string client_algo_id = 3;
+}
+
+message CancelAlgoOrderRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+  string client_algo_id = 3;
+}
+
+message ListAlgoSubOrdersRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+  string client_algo_id = 3;
+}
+
+message AlgoOrderSnapshot {
+  AccountRef account = 1;
+  InstrumentKey instrument = 2;
+  string client_algo_id = 3;
+  optional string exchange_algo_id = 4;
+  string algorithm = 5;
+  AlgoOrderState state = 6;
+  string requested_quantity = 7;
+  string executed_quantity = 8;
+  string limit_price = 9;
+  optional string reason_code = 10;
+  int64 exchange_time_ms = 11;
+  int64 gateway_received_at_ms = 12;
+}
+
+message AlgoSubOrder {
+  string exchange_sub_order_id = 1;
+  OrderState state = 2;
+  string quantity = 3;
+  string filled_quantity = 4;
+  optional string average_price = 5;
+  int64 exchange_time_ms = 6;
+}
+
+message ListAlgoSubOrdersResponse {
+  repeated AlgoSubOrder sub_orders = 1;
+}
+
+message WatchAlgoEventsRequest {
+  AccountRef account = 1;
+  string request_id = 2;
+}
+
+message AlgoEvent {
+  oneof payload {
+    StreamStatus status = 1;
+    AlgoOrderSnapshot algo_order = 2;
+    AlgoSubOrder sub_order = 3;
+    Fill fill = 4;
+  }
+}

@@ -1,6 +1,6 @@
-.PHONY: check rust-check rust-test rust-fmt node-install node-check compose-config compose-up compose-down
+.PHONY: check rust-check rust-test rust-fmt node-install node-check web-install web-check compose-config compose-up compose-down
 
-check: rust-fmt rust-check rust-test node-check compose-config
+check: rust-fmt rust-check rust-test node-check web-check compose-config
 
 rust-fmt:
 	cargo fmt --all -- --check
@@ -16,6 +16,12 @@ node-install:
 
 node-check:
 	npm --prefix gateway-node run check
+
+web-install:
+	npm --prefix web ci
+
+web-check:
+	npm --prefix web run check
 
 compose-config:
 	docker compose -f deploy/compose.yaml config --quiet

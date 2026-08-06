@@ -1,17 +1,34 @@
-# 部署原则
+# 部署说明
 
-本地开发使用 [deploy/compose.yaml](../deploy/compose.yaml)。生产部署方案需要在真实交易阶段前结合目标运行环境单独设计。
+首个共享环境面向单台 Linux，通过私网或 VPN 访问。Compose 只公开 nginx 的 Web/API 端口，不公开 PostgreSQL、Prometheus 或内部 gRPC。
 
-## 生产最低要求
+## 启动
 
-- PostgreSQL 使用托管或具备备份、PITR 和恢复演练的独立实例。
-- Rust 服务和网关不共用 root 用户。
-- 内部 gRPC 开启身份认证和加密。
-- 每家交易所可以独立发布、限频、熔断和回滚。
-- API Key 从 secret manager 注入，不经过数据库和日志。
-- 只读和交易凭证分离；交易凭证禁用提现权限。
-- 真实下单前具备全局停止、账户限额、价格偏离和裸露时间告警。
+```bash
+cp .env.example .env
+# 修改 POSTGRES_PASSWORD 和 BALLAST_PUBLIC_ORIGIN
+docker compose -f deploy/compose.yaml up --build -d
+```
 
-## 发布顺序
+访问 `${BALLAST_PUBLIC_ORIGIN}`。网关需要能够访问五家交易所的公共 REST 和 WebSocket 域名。
 
-数据库迁移必须先于依赖新结构的 Rust 服务。Node 网关和 Rust 客户端的 Protobuf 版本必须兼容；发生语义破坏时发布新的 protobuf package 版本。
+## 服务
+
+- `web`：静态前端和 `/api` WebSocket/HTTP 反向代理。
+- `server`：Rust API、调度 worker 和 `/metrics`。
+- `gateway`：Node/ccxt 公共行情 gRPC。
+- `postgres`：权威任务、切片和事件。
+- `prometheus`：15 天指标保留，不对宿主机暴露端口。
+- `backup`：默认每日 custom-format `pg_dump`，默认保留 14 天。
+
+## 恢复演练
+
+至少每月把最新 `.dump` 恢复到独立 PostgreSQL 实例，运行迁移状态检查并核对任务、切片、事件序号。备份成功不等于可恢复，恢复演练结果应进入运维记录。
+
+## 生产前仍需完成
+
+- OIDC 和角色权限。
+- 内部 RPC 身份认证/加密或等价服务网格策略。
+- 按交易所拆分私有账户网关。
+- 密钥通过 Compose secrets 或目标环境 secret manager 挂载。
+- 交易限额、kill switch、订单对账和告警接收端。

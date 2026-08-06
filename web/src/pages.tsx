@@ -15,25 +15,25 @@ export function ControlRoomPage() {
   const { t } = useTranslation();
   const dashboard = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 10_000 });
   const instruments = useQuery({ queryKey: ["instruments"], queryFn: api.instruments });
-  if (dashboard.error) return <ErrorPanel error={dashboard.error} />;
   const data = dashboard.data;
   const analytics = data?.analytics;
   const residual = analytics ? Math.max(0, 1 - Number(analytics.average_completion_ratio)) : 0;
   return <>
-    <PageHeader eyebrow="CONTROL / OPERATIONS" title={t("controlRoom")} description={t("controlRoomDescription")} action={<Link className="primary-button" to="/executions/new" search={{template:undefined}}>{t("createExecution")}</Link>} />
-    <div className="mode-banner"><b>PAPER</b><span>{t("paperBoundary")}</span><time>{data ? new Date(data.generated_at).toLocaleTimeString() : "—"}</time></div>
+    <PageHeader eyebrow="OPERATIONS / COMMAND DECK" title={t("controlRoom")} description={t("controlRoomDescription")} action={<Link className="primary-button" to="/executions/new" search={{template:undefined}}>＋ {t("createExecution")}</Link>} />
+    <div className="mode-banner"><b>PAPER</b><span>{t("paperBoundary")}</span><time>{data ? `SNAPSHOT ${new Date(data.generated_at).toLocaleTimeString()}` : "AWAITING SNAPSHOT"}</time></div>
+    {dashboard.error && <ErrorPanel error={dashboard.error} />}
     <StabilityLine residual={residual} label={t("executionResidual")} />
     <section className="metric-strip">
-      <Metric label={t("activeTasks")} value={String(analytics?.active_count ?? 0).padStart(2, "0")} note={t("last24Hours")} />
-      <Metric label={t("exceptions")} value={String(analytics?.exception_count ?? 0).padStart(2, "0")} tone={(analytics?.exception_count ?? 0) > 0 ? "alarm" : "default"} />
+      <Metric label={t("activeTasks")} value={String(analytics?.active_count ?? 0).padStart(2, "0")} note="OPEN EXECUTION OBJECTS" />
+      <Metric label={t("exceptions")} value={String(analytics?.exception_count ?? 0).padStart(2, "0")} note="REQUIRES OPERATOR REVIEW" tone={(analytics?.exception_count ?? 0) > 0 ? "alarm" : "default"} />
       <Metric label={t("completion")} value={`${((Number(analytics?.average_completion_ratio ?? "0")) * 100).toFixed(1)}%`} note={t("taskAverage")} />
       <Metric label={t("medianSlippage")} value={analytics?.median_slippage_bps ? `${analytics.median_slippage_bps} bps` : "—"} note="P95 / execution analysis" />
     </section>
     <section className="dashboard-grid operations-dashboard">
-      <article className="panel task-panel"><PanelTitle title={t("needsAttention")} tag="ACTION QUEUE" />
+      <article className="panel task-panel"><PanelTitle title={t("needsAttention")} tag="PRIORITY / ACTION QUEUE" />
         {data?.urgent_tasks.length ? <TaskTable tasks={data.urgent_tasks} instruments={new Map(instruments.data?.map((item) => [item.id, item]))} compact /> : <EmptyState text={t("noUrgentTasks")} />}
       </article>
-      <article className="panel"><PanelTitle title={t("venueHealth")} tag="PUBLIC MARKET DATA"/><div className="health-list">
+      <article className="panel"><PanelTitle title={t("venueHealth")} tag="5 VENUES / PUBLIC DATA"/><div className="health-list">
         {data?.exchanges.map((exchange) => <Link to="/venues/$exchange" params={{ exchange: exchange.exchange }} key={exchange.exchange}>
           <b>{displayExchange(exchange.exchange)}</b><span>{exchange.instrument_count} {t("instruments")} · {exchange.request_latency_ms}ms</span><StatusPill status={exchange.status}/>
         </Link>)}
@@ -48,21 +48,45 @@ export function ExecutionsPage() {
   const { t } = useTranslation(); const [status, setStatus] = useState("active"); const [exchange, setExchange] = useState("all"); const [strategy, setStrategy] = useState("all");
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks, refetchInterval: 5_000 });
   const instruments = useQuery({ queryKey: ["instruments"], queryFn: api.instruments });
-  if (tasks.error) return <ErrorPanel error={tasks.error} />;
   const instrumentMap = new Map(instruments.data?.map((item) => [item.id, item]));
   const filtered = (tasks.data ?? []).filter((task) => {
     const instrument = instrumentMap.get(task.instrument_id);
     return (status === "all" || (status === "active" ? activeStatuses.has(task.status) : task.status === status))
       && (exchange === "all" || instrument?.exchange === exchange) && (strategy === "all" || task.strategy === strategy);
   });
-  return <><PageHeader eyebrow="EXECUTION / ORDER MANAGEMENT" title={t("executions")} description={t("executionsDescription")} action={<Link className="primary-button" to="/executions/new" search={{template:undefined}}>{t("createExecution")}</Link>} />
+  const allTasks = tasks.data ?? [];
+  const counts = {
+    active: allTasks.filter((task) => activeStatuses.has(task.status)).length,
+    paused: allTasks.filter((task) => task.status === "paused").length,
+    completed: allTasks.filter((task) => task.status === "completed").length,
+    failed: allTasks.filter((task) => task.status === "failed" || task.status === "expired").length,
+  };
+  return <><PageHeader eyebrow="EXECUTION / LIVE BLOTTER" title={t("executions")} description={t("executionsDescription")} action={<Link className="primary-button" to="/executions/new" search={{template:undefined}}>＋ {t("createExecution")}</Link>} />
+    {tasks.error && <ErrorPanel error={tasks.error} />}
+    <section className="execution-ledger" aria-label="Execution status summary">
+      <div><span>ACTIVE</span><b>{String(counts.active).padStart(2,"0")}</b></div>
+      <div><span>PAUSED</span><b className={counts.paused ? "copper" : ""}>{String(counts.paused).padStart(2,"0")}</b></div>
+      <div><span>COMPLETED</span><b>{String(counts.completed).padStart(2,"0")}</b></div>
+      <div><span>FAILED / EXPIRED</span><b className={counts.failed ? "alarm-text" : ""}>{String(counts.failed).padStart(2,"0")}</b></div>
+    </section>
     <section className="filter-bar" aria-label={t("filters")}><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="active">{t("activeOnly")}</option><option value="all">{t("allStatuses")}</option><option value="paused">paused</option><option value="completed">completed</option><option value="failed">failed</option></select><select value={exchange} onChange={(event) => setExchange(event.target.value)}><option value="all">{t("allVenues")}</option>{["binance","okx","bybit","gate_io","bitget"].map((item) => <option key={item} value={item}>{displayExchange(item)}</option>)}</select><select value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="all">{t("allStrategies")}</option><option value="twap">TWAP</option><option value="pov">POV</option></select><span>{filtered.length} {t("tasks")}</span></section>
     <section className="panel operations-panel"><TaskTable tasks={filtered} instruments={instrumentMap} /></section></>;
 }
 
 function TaskTable({ tasks, instruments = new Map(), compact = false }: { tasks: ExecutionTask[]; instruments?: Map<string, Instrument>; compact?: boolean }) {
   const { t } = useTranslation(); if (!tasks.length) return <EmptyState text={t("noTasks")} />;
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>{t("execution")}</th><th>{t("venueInstrument")}</th><th>{t("strategy")}</th><th>{t("progress")}</th>{!compact && <><th>{t("residual")}</th><th>{t("nextSlice")}</th></>}<th>{t("status")}</th><th/></tr></thead><tbody>{tasks.map((task) => { const instrument = instruments.get(task.instrument_id); return <tr key={task.id}><td><b>{task.side === "buy" ? t("buy") : t("sell")}</b><small>{task.id.slice(0,8)}</small></td><td><b>{instrument?.symbol ?? task.instrument_id.slice(0,8)}</b><small>{instrument ? displayExchange(instrument.exchange) : "—"}</small></td><td><b>{task.strategy.toUpperCase()}</b><small>{task.quantity_unit}</small></td><td><TaskProgress task={task}/></td>{!compact && <><td className="mono copper">{task.residual_amount}</td><td className="mono"><RelativeTime value={task.next_tick_at}/></td></>}<td><StatusPill status={task.status}/>{task.paused_reason && <small className="alarm-text">{task.paused_reason}</small>}</td><td><Link className="evidence-link" to="/executions/$executionId" params={{ executionId: task.id }}>{t("inspect")} →</Link></td></tr>; })}</tbody></table></div>;
+  return <div className="table-scroll"><table className="data-table execution-table"><thead><tr><th>ID / STATE</th><th>{t("venueInstrument")}</th><th>SIDE / ALGO</th>{!compact && <th>TARGET / EXECUTED</th>}<th>{t("progress")}</th>{!compact && <><th>{t("residual")}</th><th>{t("nextSlice")}</th></>}<th/></tr></thead><tbody>{tasks.map((task) => {
+    const instrument = instruments.get(task.instrument_id);
+    return <tr key={task.id}>
+      <td><StatusPill status={task.status}/><small>{task.id.slice(0,8).toUpperCase()}</small>{task.paused_reason && <small className="alarm-text">{task.paused_reason}</small>}</td>
+      <td><b>{instrument?.symbol ?? task.instrument_id.slice(0,8)}</b><small>{instrument ? `${displayExchange(instrument.exchange)} / ${instrument.market_kind}` : "VENUE PENDING"}</small></td>
+      <td><b className={task.side === "sell" ? "copper" : ""}>{task.side.toUpperCase()}</b><small>{task.strategy.toUpperCase()} / {task.execution_backend === "managed_ioc" ? "MANAGED" : "NATIVE"}</small></td>
+      {!compact && <td className="mono"><b>{task.requested_amount}</b><small>{task.executed_amount} / {task.quantity_unit}</small></td>}
+      <td><TaskProgress task={task}/></td>
+      {!compact && <><td className="mono copper">{task.residual_amount}</td><td className="mono"><RelativeTime value={task.next_tick_at}/></td></>}
+      <td><Link className="evidence-link" to="/executions/$executionId" params={{ executionId: task.id }}>{t("inspect")} →</Link></td>
+    </tr>;
+  })}</tbody></table></div>;
 }
 
 export function CreateExecutionPage() {

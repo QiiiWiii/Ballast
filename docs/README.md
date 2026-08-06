@@ -6,6 +6,7 @@
 - [本地开发](development.md)
 - [部署说明](deployment.md)
 - [数据库边界](database.md)
+- [前端产品与交互架构](frontend.md)
 - [ADR-0001：Rust 核心与 Node/ccxt 网关](decisions/0001-rust-engine-node-gateway.md)
 - [ADR：barter-instrument 集成边界](adr/0001-barter-instrument-boundary.md)
 - [ADR：显式 managed/native 后端](adr/0002-explicit-execution-backends.md)

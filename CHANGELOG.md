@@ -26,6 +26,8 @@
 
 ### Changed
 
+- 将前端从卡片式原型重构为机构执行工作台：按执行工作流、数据与通道、安全与系统分组导航，增加全局环境状态栏、执行 blotter、运营状态总账和桌面/移动双布局。
+- 控制舱收敛为异常优先的信息层级，保留“龙骨稳定轴”作为纸面阶段执行残余的唯一标志性可视化。
 - Node 使用 Protobuf 生成的 TypeScript 类型，`ccxt` 固定为 `4.5.58`。
 - 执行状态收敛为 `scheduled/running/paused/cancelling/completed/cancelled/expired/failed`。
 - 任务创建契约改为强制引用 `template_version_id`，移除直接提交策略参数的旧契约。

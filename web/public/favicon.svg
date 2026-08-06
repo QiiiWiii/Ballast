@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Ballast">
+  <rect width="32" height="32" rx="4" fill="#07171c"/>
+  <path d="M3 13.5h26" fill="none" stroke="#7fb4bd" stroke-width="1.5"/>
+  <path d="M5 8h7v4H5zm15 0h7v4h-7z" fill="#4c9baa"/>
+  <path d="M15 4h2v20h-2z" fill="#f4f8f7"/>
+  <path d="M10 22h12l-3 7h-6z" fill="#cb8d54"/>
+</svg>

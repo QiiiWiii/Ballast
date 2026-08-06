@@ -1,48 +1,57 @@
-import { Link, Outlet } from "@tanstack/react-router";
-import { ReactNode } from "react";
+import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import type { TFunction } from "i18next";
+import { ReactNode, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ExecutionTask } from "./api";
-import { useEventStream } from "./hooks";
+import { EventStreamStatusContext, useEventStream } from "./hooks";
 import i18n from "./i18n";
 
-type NavItem = readonly [string, string, string];
+type NavItem = readonly [string, string];
 
-const executionNav: readonly NavItem[] = [
-  ["/", "controlRoom", "CO"],
-  ["/executions", "executions", "EX"],
-  ["/strategies", "strategyCenter", "ST"],
-  ["/approvals", "approvals", "AP"],
+const primaryNav: readonly NavItem[] = [
+  ["/", "controlRoom"],
+  ["/executions", "executions"],
+  ["/strategies", "strategyCenter"],
+  ["/analytics", "analytics"],
+  ["/venues", "venues"],
 ];
 
-const intelligenceNav: readonly NavItem[] = [
-  ["/analytics", "analytics", "AN"],
-  ["/venues", "venues", "VN"],
-  ["/accounts", "accountsReconciliation", "AC"],
+const utilityNav: readonly NavItem[] = [
+  ["/approvals", "approvals"],
+  ["/accounts", "accountsReconciliation"],
+  ["/risk", "riskControls"],
+  ["/hedging", "hedging"],
+  ["/system", "systemStatus"],
+  ["/roadmap", "roadmap"],
 ];
 
-const safeguardsNav: readonly NavItem[] = [
-  ["/risk", "riskControls", "RK"],
-  ["/hedging", "hedging", "HG"],
-  ["/system", "systemStatus", "SY"],
-  ["/roadmap", "roadmap", "RM"],
-];
-
-function NavGroup({ label, items }: { label: string; items: readonly NavItem[] }) {
+function NavLinks({ items, className }: { items: readonly NavItem[]; className?: string }) {
   const { t } = useTranslation();
-  return <div className="nav-group">
-    <span className="nav-group-label">{label}</span>
-    <nav aria-label={label}>
-      {items.map(([to, translation, code]) => <Link key={to} to={to} activeOptions={{ exact: to === "/" }}>
-        <span className="nav-code">{code}</span><span>{t(translation)}</span><i aria-hidden="true" />
-      </Link>)}
-    </nav>
+  return <div className={className}>
+    {items.map(([to, translation]) => <Link key={to} to={to} activeOptions={{ exact: to === "/" }}>
+      <span>{t(translation)}</span>
+    </Link>)}
   </div>;
+}
+
+export function BallastLogo({ compact = false }: { compact?: boolean }) {
+  return <span className={`ballast-logo ${compact ? "is-compact" : ""}`}>
+    <svg className="ballast-symbol" viewBox="0 0 40 40" aria-hidden="true">
+      <path className="symbol-waterline" d="M3 17.5H37" />
+      <path className="symbol-load" d="M5 10H15V15H5ZM25 10H35V15H25Z" />
+      <path className="symbol-keel" d="M18.5 5H21.5V29H18.5Z" />
+      <path className="symbol-ballast" d="M13 27H27L23.5 35H16.5Z" />
+    </svg>
+    {!compact && <span className="ballast-wordmark"><strong>BALLAST</strong><small>压舱石 · EXECUTION CONTROL</small></span>}
+  </span>;
 }
 
 export function AppShell() {
   const { t } = useTranslation();
   const connected = useEventStream();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const navigation = useRef<HTMLElement>(null);
   const language = i18n.language.startsWith("zh") ? "zh" : "en";
   const switchLanguage = () => {
     const next = language === "zh" ? "en" : "zh";
@@ -50,41 +59,31 @@ export function AppShell() {
     void i18n.changeLanguage(next);
   };
 
-  return <div className="app-shell">
-    <aside className="keel-nav">
-      <div className="brand-lockup">
-        <span className="brand-mark" aria-hidden="true"><i/><i/><i/></span>
-        <div><strong>{t("brand")}</strong><small>EXECUTION CONTROL</small></div>
-      </div>
-      <div className="environment-card">
-        <span>{t("environment")}</span><b>PAPER</b><small>{t("paperBoundaryShort")}</small>
-      </div>
-      <NavGroup label={t("navExecution")} items={executionNav} />
-      <NavGroup label={t("navIntelligence")} items={intelligenceNav} />
-      <NavGroup label={t("navSafeguards")} items={safeguardsNav} />
-      <div className="nav-foot">
-        <span className={`link-state ${connected ? "is-live" : ""}`}><i/>{connected ? t("eventStreamOnline") : t("eventStreamOffline")}</span>
-        <button className="language-switch" onClick={switchLanguage}>{language === "zh" ? "ENGLISH" : "中文界面"}</button>
-      </div>
-    </aside>
+  useEffect(() => {
+    const active = navigation.current?.querySelector<HTMLElement>('a[data-status="active"]');
+    active?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [pathname]);
 
-    <section className="workbench">
-      <header className="system-bar">
-        <div className="system-breadcrumb"><b>BALLAST</b><span>/</span><span>{t("operationsWorkspace")}</span></div>
-        <div className="system-indicators">
-          <span><i className={connected ? "signal-ok" : "signal-alarm"}/>{t("eventBus")}</span>
-          <span><i className="signal-paper"/>{t("executionMode")}: PAPER</span>
-          <span className="session-id">LOCAL / OPS</span>
+  return <EventStreamStatusContext.Provider value={connected}><div className="app-shell">
+    <a className="skip-link" href="#main-content">{t("skipToContent")}</a>
+    <header className="command-header">
+      <div className="command-primary">
+        <Link to="/" className="brand-lockup" aria-label="Ballast 压舱石"><BallastLogo /></Link>
+        <div className="environment-chip"><i aria-hidden="true"/><b>PAPER</b><span>{t("paperBoundaryShort")}</span></div>
+        <div className="command-status">
+          <span className={`link-state ${connected ? "is-live" : ""}`}><i/>{connected ? t("eventStreamOnline") : t("eventStreamOffline")}</span>
+          <button className="language-switch" onClick={switchLanguage}>{language === "zh" ? "EN" : "中"}</button>
         </div>
-      </header>
-      <main className="workspace"><Outlet /></main>
+      </div>
+      <nav ref={navigation} className="top-navigation" aria-label={t("primaryNavigation")}>
+        <NavLinks items={primaryNav} className="top-nav-primary" />
+        <NavLinks items={utilityNav} className="top-nav-utility" />
+      </nav>
+    </header>
+    <section className="workbench">
+      <main className="workspace" id="main-content" tabIndex={-1}><Outlet /></main>
     </section>
-
-    <nav className="mobile-nav" aria-label={t("primaryNavigation")}>
-      {executionNav.slice(0, 3).concat(intelligenceNav.slice(0, 2)).map(([to, label, code]) =>
-        <Link key={to} to={to} activeOptions={{ exact: to === "/" }}><b>{code}</b><span>{t(label)}</span></Link>)}
-    </nav>
-  </div>;
+  </div></EventStreamStatusContext.Provider>;
 }
 
 export function PageHeader({ eyebrow, title, action, description }: { eyebrow: string; title: string; action?: ReactNode; description?: string }) {
@@ -111,8 +110,13 @@ export function Metric({ label, value, note, tone = "default" }: { label: string
   return <article className={`metric metric-${tone}`}><span>{label}</span><strong>{value}</strong>{note && <small>{note}</small>}</article>;
 }
 
+export function statusText(status: string, t: TFunction) {
+  return t(`status_${status}`, { defaultValue: status.replaceAll("_", " ") });
+}
+
 export function StatusPill({ status }: { status: string }) {
-  return <span className={`status-pill status-${status}`}><i/>{status.replaceAll("_", " ")}</span>;
+  const { t } = useTranslation();
+  return <span className={`status-pill status-${status}`}><i/>{statusText(status, t)}</span>;
 }
 
 export function ErrorPanel({ error }: { error: Error }) {

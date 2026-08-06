@@ -32,7 +32,7 @@ export const exchangeStatusSchema = z.object({
   status: z.string(),
   last_error_code: z.string().nullable(),
   last_success_at_ms: z.number().nullable(),
-  request_latency_ms: z.number(),
+  health_query_latency_ms: z.number().nullable(),
   instrument_count: z.number(),
   active_subscriptions: z.number(),
   stale_subscriptions: z.number(),
@@ -46,6 +46,10 @@ export const instrumentSchema = z.object({
   contract_size: decimal.nullable(), price_tick: decimal, quantity_step: decimal,
   minimum_quantity: decimal.nullable(), minimum_notional: decimal.nullable(),
   maker_fee_rate: decimal.nullable(), taker_fee_rate: decimal.nullable(), active: z.boolean(), observed_at: timestamp,
+});
+
+export const instrumentPageSchema = z.object({
+  items: z.array(instrumentSchema), total: z.number(), limit: z.number(), offset: z.number(),
 });
 
 export const taskSchema = z.object({
@@ -102,7 +106,7 @@ export const dashboardSchema = z.object({
 });
 
 export const healthEventSchema = z.object({
-  sequence: z.number(), status: z.string(), error_code: z.string().nullable(), request_latency_ms: z.number().nullable(), observed_at: timestamp,
+  sequence: z.number(), status: z.string(), error_code: z.string().nullable(), health_query_latency_ms: z.number().nullable(), observed_at: timestamp,
 });
 
 export const subscriptionSchema = z.object({
@@ -116,6 +120,7 @@ export const eventSchema = z.object({
 
 export type ExchangeStatus = z.infer<typeof exchangeStatusSchema>;
 export type Instrument = z.infer<typeof instrumentSchema>;
+export type InstrumentPage = z.infer<typeof instrumentPageSchema>;
 export type ExecutionTask = z.infer<typeof taskSchema>;
 export type ExecutionSlice = z.infer<typeof sliceSchema>;
 export type StrategyTemplate = z.infer<typeof templateSchema>;
@@ -134,6 +139,16 @@ export interface CreateTaskInput {
   instrument_id: string; side: "buy" | "sell"; target_amount: string; template_version_id: string;
 }
 
+export interface InstrumentQuery {
+  exchange?: z.infer<typeof exchangeSchema>;
+  market_kind?: z.infer<typeof marketKindSchema>;
+  active_only?: boolean;
+  search?: string;
+  ids?: string[];
+  limit?: number;
+  offset?: number;
+}
+
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(path, init);
   const body = await response.json().catch(() => null) as unknown;
@@ -150,15 +165,26 @@ const jsonRequest = (method: "POST", body?: unknown): RequestInit => ({
 
 export const api = {
   exchanges: async () => z.array(exchangeStatusSchema).parse(await request("/api/v1/exchanges")),
+  exchangeSnapshots: async () => z.array(exchangeStatusSchema).parse(await request("/api/v1/exchanges/snapshots")),
   exchange: async (exchange: string) => exchangeStatusSchema.parse(await request(`/api/v1/exchanges/${exchange}`)),
   healthEvents: async (exchange: string) => z.array(healthEventSchema).parse(await request(`/api/v1/exchanges/${exchange}/health-events`)),
   subscriptions: async (exchange: string) => z.array(subscriptionSchema).parse(await request(`/api/v1/exchanges/${exchange}/subscriptions`)),
-  instruments: async () => z.array(instrumentSchema).parse(await request("/api/v1/instruments?active_only=true")),
+  instruments: async (query: InstrumentQuery = {}) => {
+    const params = new URLSearchParams();
+    if (query.exchange) params.set("exchange", query.exchange);
+    if (query.market_kind) params.set("market_kind", query.market_kind);
+    if (query.active_only ?? true) params.set("active_only", "true");
+    if (query.search) params.set("search", query.search);
+    if (query.ids?.length) params.set("ids", query.ids.join(","));
+    params.set("limit", String(query.limit ?? 100));
+    params.set("offset", String(query.offset ?? 0));
+    return instrumentPageSchema.parse(await request(`/api/v1/instruments?${params}`));
+  },
   syncInstruments: async () => { await request("/api/v1/instruments/sync", jsonRequest("POST", { reload: true })); },
   tasks: async () => z.array(taskSchema).parse(await request("/api/v1/tasks?limit=500")),
   task: async (id: string) => taskSchema.parse(await request(`/api/v1/tasks/${id}`)),
   slices: async (id: string) => z.array(sliceSchema).parse(await request(`/api/v1/tasks/${id}/slices`)),
-  events: async () => z.array(eventSchema).parse(await request("/api/v1/events?after_sequence=0&limit=1000")),
+  events: async (taskId: string) => z.array(eventSchema).parse(await request(`/api/v1/events?task_id=${encodeURIComponent(taskId)}&limit=1000`)),
   createTask: async (input: CreateTaskInput) => taskSchema.parse(await request("/api/v1/tasks", {
     ...jsonRequest("POST", input), headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
   })),

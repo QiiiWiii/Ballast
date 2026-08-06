@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 48" role="img" aria-labelledby="title desc">
+  <title id="title">Ballast 压舱石</title>
+  <desc id="desc">Ballast 多交易所执行与对冲控制平台横向标志</desc>
+  <g transform="translate(4 4)">
+    <path d="M0 17.5h34" fill="none" stroke="#2d7889" stroke-width="1.5"/>
+    <path d="M2 10h10v5H2zm20 0h10v5H22z" fill="#4c9baa"/>
+    <path d="M15.5 5h3v24h-3z" fill="#0b2027"/>
+    <path d="M10 27h14l-3.5 8h-7z" fill="#b97843"/>
+  </g>
+  <text x="54" y="24" fill="#0b2027" font-family="Barlow Condensed, Arial Narrow, sans-serif" font-size="25" font-weight="600" letter-spacing="3.5">BALLAST</text>
+  <text x="55" y="38" fill="#617579" font-family="IBM Plex Mono, monospace" font-size="7" letter-spacing="1.05">压舱石 · EXECUTION CONTROL</text>
+</svg>

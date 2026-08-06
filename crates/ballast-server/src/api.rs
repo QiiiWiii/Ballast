@@ -33,6 +33,7 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/exchanges", get(list_exchanges))
+        .route("/api/v1/exchanges/snapshots", get(exchange_snapshots))
         .route("/api/v1/exchanges/{exchange}", get(get_exchange))
         .route(
             "/api/v1/exchanges/{exchange}/health-events",
@@ -160,8 +161,8 @@ struct ExchangeView {
     status: String,
     last_error_code: Option<String>,
     last_success_at_ms: Option<i64>,
-    request_latency_ms: i64,
-    instrument_count: usize,
+    health_query_latency_ms: Option<i64>,
+    instrument_count: i64,
     active_subscriptions: i64,
     stale_subscriptions: i64,
     capabilities: Option<CapabilitiesView>,
@@ -179,15 +180,6 @@ struct CapabilitiesView {
 
 async fn list_exchanges(State(state): State<AppState>) -> ApiResult<Json<Vec<ExchangeView>>> {
     let started = Instant::now();
-    let health = state.gateway.health().await.map_err(ApiError::gateway)?;
-    let request_latency_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
-    let instruments = ballast_storage::list_instruments(&state.database)
-        .await
-        .map_err(ApiError::database)?;
-    let mut health_by_exchange = BTreeMap::new();
-    for adapter in health.adapters {
-        health_by_exchange.insert(adapter.exchange, adapter);
-    }
     let capability_results = join_all(
         exchanges()
             .iter()
@@ -195,6 +187,14 @@ async fn list_exchanges(State(state): State<AppState>) -> ApiResult<Json<Vec<Exc
             .map(|exchange| state.gateway.capabilities(exchange)),
     )
     .await;
+    let health = state.gateway.health().await.map_err(ApiError::gateway)?;
+    let health_query_latency_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let instrument_counts = exchange_instrument_counts(&state).await?;
+    let subscription_counts = exchange_subscription_counts(&state).await?;
+    let mut health_by_exchange = BTreeMap::new();
+    for adapter in health.adapters {
+        health_by_exchange.insert(adapter.exchange, adapter);
+    }
     let mut result = Vec::with_capacity(5);
     for (exchange, capability_result) in exchanges().iter().copied().zip(capability_results) {
         let capabilities = capability_result.ok().map(|value| CapabilitiesView {
@@ -208,48 +208,229 @@ async fn list_exchanges(State(state): State<AppState>) -> ApiResult<Json<Vec<Exc
         let key = exchange_proto_number(exchange);
         let adapter = health_by_exchange.remove(&key);
         let exchange_name = exchange_text(exchange);
-        let instrument_count = instruments
-            .iter()
-            .filter(|instrument| instrument.instrument.id.exchange == exchange)
-            .count();
-        let subscription_counts = sqlx::query(
-            r#"
-            SELECT COUNT(*) FILTER (WHERE status IN ('connecting', 'connected', 'reconnecting'))::bigint AS active,
-                   COUNT(*) FILTER (WHERE status = 'stale')::bigint AS stale
-            FROM market_subscription_health WHERE exchange = $1
-            "#,
-        )
-        .bind(exchange_name)
-        .fetch_one(&state.database)
-        .await
-        .map_err(ApiError::database)?;
+        let instrument_count = instrument_counts.get(exchange_name).copied().unwrap_or(0);
+        let subscriptions = subscription_counts
+            .get(exchange_name)
+            .copied()
+            .unwrap_or((0, 0));
         let status = adapter
             .as_ref()
             .map_or_else(|| "unknown".to_owned(), |value| value.status.clone());
         let error_code = adapter
             .as_ref()
             .and_then(|value| value.last_error_code.clone());
+        let last_success_at_ms = adapter.as_ref().and_then(|value| value.last_success_at_ms);
+        upsert_exchange_health(
+            &state,
+            exchange_name,
+            &status,
+            error_code.as_deref(),
+            last_success_at_ms,
+            health_query_latency_ms,
+        )
+        .await?;
         record_exchange_health_event(
             &state,
             exchange_name,
             &status,
             error_code.as_deref(),
-            request_latency_ms,
+            health_query_latency_ms,
         )
         .await?;
         result.push(ExchangeView {
             exchange: exchange_name,
             status,
             last_error_code: error_code,
-            last_success_at_ms: adapter.and_then(|value| value.last_success_at_ms),
-            request_latency_ms,
+            last_success_at_ms,
+            health_query_latency_ms: Some(health_query_latency_ms),
             instrument_count,
-            active_subscriptions: subscription_counts.try_get("active").unwrap_or(0),
-            stale_subscriptions: subscription_counts.try_get("stale").unwrap_or(0),
+            active_subscriptions: subscriptions.0,
+            stale_subscriptions: subscriptions.1,
             capabilities,
         });
     }
     Ok(Json(result))
+}
+
+async fn exchange_snapshots(State(state): State<AppState>) -> ApiResult<Json<Vec<ExchangeView>>> {
+    Ok(Json(list_exchange_snapshots(&state).await?))
+}
+
+async fn exchange_instrument_counts(state: &AppState) -> ApiResult<BTreeMap<String, i64>> {
+    sqlx::query(
+        "SELECT exchange, COUNT(*)::bigint AS instrument_count FROM instruments GROUP BY exchange",
+    )
+    .fetch_all(&state.database)
+    .await
+    .map_err(ApiError::database)?
+    .into_iter()
+    .map(|row| {
+        Ok((
+            row.try_get::<String, _>("exchange")?,
+            row.try_get::<i64, _>("instrument_count")?,
+        ))
+    })
+    .collect::<Result<_, sqlx::Error>>()
+    .map_err(ApiError::database)
+}
+
+async fn exchange_subscription_counts(state: &AppState) -> ApiResult<BTreeMap<String, (i64, i64)>> {
+    sqlx::query(
+        r#"
+        SELECT exchange,
+               COUNT(*) FILTER (WHERE status IN ('connecting', 'connected', 'reconnecting'))::bigint AS active,
+               COUNT(*) FILTER (WHERE status = 'stale')::bigint AS stale
+        FROM market_subscription_health
+        GROUP BY exchange
+        "#,
+    )
+    .fetch_all(&state.database)
+    .await
+    .map_err(ApiError::database)?
+    .into_iter()
+    .map(|row| {
+        Ok((
+            row.try_get::<String, _>("exchange")?,
+            (
+                row.try_get::<i64, _>("active")?,
+                row.try_get::<i64, _>("stale")?,
+            ),
+        ))
+    })
+    .collect::<Result<_, sqlx::Error>>()
+    .map_err(ApiError::database)
+}
+
+async fn list_exchange_snapshots(state: &AppState) -> ApiResult<Vec<ExchangeView>> {
+    let health_rows = sqlx::query(
+        r#"
+        SELECT health.exchange,
+               health.status,
+               health.last_error_code,
+               health.last_success_at,
+               health.request_latency_ms
+        FROM exchange_health health
+        "#,
+    )
+    .fetch_all(&state.database)
+    .await
+    .map_err(ApiError::database)?;
+    let instrument_rows = sqlx::query(
+        "SELECT exchange, COUNT(*)::bigint AS instrument_count FROM instruments GROUP BY exchange",
+    )
+    .fetch_all(&state.database)
+    .await
+    .map_err(ApiError::database)?;
+    let subscription_rows = sqlx::query(
+        r#"
+        SELECT exchange,
+               COUNT(*) FILTER (WHERE status IN ('connecting', 'connected', 'reconnecting'))::bigint AS active,
+               COUNT(*) FILTER (WHERE status = 'stale')::bigint AS stale
+        FROM market_subscription_health
+        GROUP BY exchange
+        "#,
+    )
+    .fetch_all(&state.database)
+    .await
+    .map_err(ApiError::database)?;
+
+    let health = health_rows
+        .into_iter()
+        .map(|row| {
+            let exchange = row.try_get::<String, _>("exchange")?;
+            let snapshot = (
+                row.try_get::<String, _>("status")?,
+                row.try_get::<Option<String>, _>("last_error_code")?,
+                row.try_get::<Option<DateTime<Utc>>, _>("last_success_at")?,
+                row.try_get::<Option<i64>, _>("request_latency_ms")?,
+            );
+            Ok((exchange, snapshot))
+        })
+        .collect::<Result<BTreeMap<_, _>, sqlx::Error>>()
+        .map_err(ApiError::database)?;
+    let instrument_counts = instrument_rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String, _>("exchange")?,
+                row.try_get::<i64, _>("instrument_count")?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, sqlx::Error>>()
+        .map_err(ApiError::database)?;
+    let subscription_counts = subscription_rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String, _>("exchange")?,
+                (
+                    row.try_get::<i64, _>("active")?,
+                    row.try_get::<i64, _>("stale")?,
+                ),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, sqlx::Error>>()
+        .map_err(ApiError::database)?;
+
+    Ok(exchanges()
+        .iter()
+        .copied()
+        .map(|exchange| {
+            let exchange_name = exchange_text(exchange);
+            let snapshot = health.get(exchange_name);
+            let subscriptions = subscription_counts
+                .get(exchange_name)
+                .copied()
+                .unwrap_or((0, 0));
+            ExchangeView {
+                exchange: exchange_name,
+                status: snapshot.map_or_else(|| "unknown".to_owned(), |item| item.0.clone()),
+                last_error_code: snapshot.and_then(|item| item.1.clone()),
+                last_success_at_ms: snapshot
+                    .and_then(|item| item.2)
+                    .map(|value| value.timestamp_millis()),
+                health_query_latency_ms: snapshot.and_then(|item| item.3),
+                instrument_count: instrument_counts.get(exchange_name).copied().unwrap_or(0),
+                active_subscriptions: subscriptions.0,
+                stale_subscriptions: subscriptions.1,
+                capabilities: None,
+            }
+        })
+        .collect())
+}
+
+async fn upsert_exchange_health(
+    state: &AppState,
+    exchange: &str,
+    status: &str,
+    error_code: Option<&str>,
+    last_success_at_ms: Option<i64>,
+    health_query_latency_ms: i64,
+) -> ApiResult<()> {
+    let last_success_at = last_success_at_ms.and_then(DateTime::<Utc>::from_timestamp_millis);
+    sqlx::query(
+        r#"
+        INSERT INTO exchange_health (
+            exchange, status, last_error_code, last_success_at, request_latency_ms, observed_at
+        )
+        VALUES ($1, $2, $3, $4, $5, now())
+        ON CONFLICT (exchange) DO UPDATE SET
+            status = EXCLUDED.status,
+            last_error_code = EXCLUDED.last_error_code,
+            last_success_at = COALESCE(EXCLUDED.last_success_at, exchange_health.last_success_at),
+            request_latency_ms = EXCLUDED.request_latency_ms,
+            observed_at = EXCLUDED.observed_at
+        "#,
+    )
+    .bind(exchange)
+    .bind(status)
+    .bind(error_code)
+    .bind(last_success_at)
+    .bind(health_query_latency_ms)
+    .execute(&state.database)
+    .await
+    .map_err(ApiError::database)?;
+    Ok(())
 }
 
 async fn record_exchange_health_event(
@@ -257,24 +438,29 @@ async fn record_exchange_health_event(
     exchange: &str,
     status: &str,
     error_code: Option<&str>,
-    request_latency_ms: i64,
+    health_query_latency_ms: i64,
 ) -> ApiResult<()> {
     sqlx::query(
         r#"
         INSERT INTO exchange_health_events (exchange, status, error_code, request_latency_ms)
         SELECT $1, $2, $3, $4
         WHERE NOT EXISTS (
-            SELECT 1 FROM exchange_health_events
-            WHERE exchange = $1 AND status = $2
-              AND error_code IS NOT DISTINCT FROM $3
-              AND observed_at > now() - interval '30 seconds'
+            SELECT 1 FROM (
+                SELECT status, error_code
+                FROM exchange_health_events
+                WHERE exchange = $1
+                ORDER BY sequence DESC
+                LIMIT 1
+            ) latest
+            WHERE latest.status = $2
+              AND latest.error_code IS NOT DISTINCT FROM $3
         )
         "#,
     )
     .bind(exchange)
     .bind(status)
     .bind(error_code)
-    .bind(request_latency_ms)
+    .bind(health_query_latency_ms)
     .execute(&state.database)
     .await
     .map_err(ApiError::database)?;
@@ -285,13 +471,78 @@ async fn get_exchange(
     State(state): State<AppState>,
     Path(exchange): Path<String>,
 ) -> ApiResult<Json<ExchangeView>> {
-    parse_exchange(&exchange)?;
-    let Json(exchanges) = list_exchanges(State(state)).await?;
-    exchanges
+    let parsed_exchange = parse_exchange(&exchange)?;
+    let started = Instant::now();
+    let (capabilities, health, instrument_count, subscription_counts) = tokio::join!(
+        state.gateway.capabilities(parsed_exchange),
+        state.gateway.health(),
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::bigint FROM instruments WHERE exchange = $1")
+            .bind(&exchange)
+            .fetch_one(&state.database),
+        sqlx::query(
+            r#"
+            SELECT COUNT(*) FILTER (WHERE status IN ('connecting', 'connected', 'reconnecting'))::bigint AS active,
+                   COUNT(*) FILTER (WHERE status = 'stale')::bigint AS stale
+            FROM market_subscription_health WHERE exchange = $1
+            "#,
+        )
+        .bind(&exchange)
+        .fetch_one(&state.database),
+    );
+    let health = health.map_err(ApiError::gateway)?;
+    let instrument_count = instrument_count.map_err(ApiError::database)?;
+    let subscription_counts = subscription_counts.map_err(ApiError::database)?;
+    let health_query_latency_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let adapter = health
+        .adapters
         .into_iter()
-        .find(|item| item.exchange == exchange)
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found("exchange_not_found"))
+        .find(|adapter| adapter.exchange == exchange_proto_number(parsed_exchange));
+    let status = adapter
+        .as_ref()
+        .map_or_else(|| "unknown".to_owned(), |value| value.status.clone());
+    let error_code = adapter
+        .as_ref()
+        .and_then(|value| value.last_error_code.clone());
+    let last_success_at_ms = adapter.and_then(|value| value.last_success_at_ms);
+    upsert_exchange_health(
+        &state,
+        &exchange,
+        &status,
+        error_code.as_deref(),
+        last_success_at_ms,
+        health_query_latency_ms,
+    )
+    .await?;
+    record_exchange_health_event(
+        &state,
+        &exchange,
+        &status,
+        error_code.as_deref(),
+        health_query_latency_ms,
+    )
+    .await?;
+    Ok(Json(ExchangeView {
+        exchange: exchange_text(parsed_exchange),
+        status,
+        last_error_code: error_code,
+        last_success_at_ms,
+        health_query_latency_ms: Some(health_query_latency_ms),
+        instrument_count,
+        active_subscriptions: subscription_counts
+            .try_get("active")
+            .map_err(ApiError::database)?,
+        stale_subscriptions: subscription_counts
+            .try_get("stale")
+            .map_err(ApiError::database)?,
+        capabilities: capabilities.ok().map(|value| CapabilitiesView {
+            spot: value.spot,
+            perpetual_linear: value.perpetual_linear,
+            perpetual_inverse: value.perpetual_inverse,
+            fetch_order_book: value.fetch_order_book,
+            watch_order_book: value.watch_order_book,
+            watch_trades: value.watch_trades,
+        }),
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -299,7 +550,7 @@ struct ExchangeHealthEventView {
     sequence: i64,
     status: String,
     error_code: Option<String>,
-    request_latency_ms: Option<i64>,
+    health_query_latency_ms: Option<i64>,
     observed_at: DateTime<Utc>,
 }
 
@@ -321,7 +572,7 @@ async fn list_exchange_health_events(
                 sequence: row.try_get("sequence").unwrap_or_default(),
                 status: row.try_get("status").unwrap_or_default(),
                 error_code: row.try_get("error_code").unwrap_or(None),
-                request_latency_ms: row.try_get("request_latency_ms").unwrap_or(None),
+                health_query_latency_ms: row.try_get("request_latency_ms").unwrap_or(None),
                 observed_at: row.try_get("observed_at").unwrap_or_else(|_| Utc::now()),
             })
             .collect(),
@@ -371,6 +622,10 @@ struct InstrumentQuery {
     exchange: Option<Exchange>,
     market_kind: Option<MarketKind>,
     active_only: Option<bool>,
+    search: Option<String>,
+    ids: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -395,47 +650,64 @@ struct InstrumentView {
     observed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize)]
+struct InstrumentPageView {
+    items: Vec<InstrumentView>,
+    total: i64,
+    limit: i64,
+    offset: i64,
+}
+
+impl From<ballast_storage::StoredInstrument> for InstrumentView {
+    fn from(stored: ballast_storage::StoredInstrument) -> Self {
+        Self {
+            id: stored.id,
+            exchange: stored.instrument.id.exchange,
+            market_kind: stored.instrument.id.market_kind,
+            symbol: stored.instrument.id.symbol,
+            exchange_symbol: stored.instrument.exchange_symbol,
+            base_asset: stored.instrument.base_asset,
+            quote_asset: stored.instrument.quote_asset,
+            settle_asset: stored.instrument.settle_asset,
+            contract_kind: stored.instrument.contract_kind,
+            contract_size: decimal_option(stored.instrument.contract_size),
+            price_tick: stored.instrument.price_tick.to_string(),
+            quantity_step: stored.instrument.quantity_step.to_string(),
+            minimum_quantity: decimal_option(stored.instrument.minimum_quantity),
+            minimum_notional: decimal_option(stored.instrument.minimum_notional),
+            maker_fee_rate: decimal_option(stored.instrument.maker_fee_rate),
+            taker_fee_rate: decimal_option(stored.instrument.taker_fee_rate),
+            active: stored.instrument.active,
+            observed_at: stored.observed_at,
+        }
+    }
+}
+
 async fn list_instruments(
     State(state): State<AppState>,
     Query(query): Query<InstrumentQuery>,
-) -> ApiResult<Json<Vec<InstrumentView>>> {
-    let instruments = ballast_storage::list_instruments(&state.database)
-        .await
-        .map_err(ApiError::database)?;
-    Ok(Json(
-        instruments
-            .into_iter()
-            .filter(|stored| {
-                query
-                    .exchange
-                    .is_none_or(|value| stored.instrument.id.exchange == value)
-                    && query
-                        .market_kind
-                        .is_none_or(|value| stored.instrument.id.market_kind == value)
-                    && (!query.active_only.unwrap_or(false) || stored.instrument.active)
-            })
-            .map(|stored| InstrumentView {
-                id: stored.id,
-                exchange: stored.instrument.id.exchange,
-                market_kind: stored.instrument.id.market_kind,
-                symbol: stored.instrument.id.symbol,
-                exchange_symbol: stored.instrument.exchange_symbol,
-                base_asset: stored.instrument.base_asset,
-                quote_asset: stored.instrument.quote_asset,
-                settle_asset: stored.instrument.settle_asset,
-                contract_kind: stored.instrument.contract_kind,
-                contract_size: decimal_option(stored.instrument.contract_size),
-                price_tick: stored.instrument.price_tick.to_string(),
-                quantity_step: stored.instrument.quantity_step.to_string(),
-                minimum_quantity: decimal_option(stored.instrument.minimum_quantity),
-                minimum_notional: decimal_option(stored.instrument.minimum_notional),
-                maker_fee_rate: decimal_option(stored.instrument.maker_fee_rate),
-                taker_fee_rate: decimal_option(stored.instrument.taker_fee_rate),
-                active: stored.instrument.active,
-                observed_at: stored.observed_at,
-            })
-            .collect(),
-    ))
+) -> ApiResult<Json<InstrumentPageView>> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 250);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let ids = query.ids.as_deref().map(parse_uuid_list).transpose()?;
+    let (instruments, total) = ballast_storage::list_instruments_page(
+        &state.database,
+        query.exchange,
+        query.market_kind,
+        query.active_only.unwrap_or(false),
+        query.search.as_deref(),
+        ids.as_deref(),
+        limit,
+        offset,
+    )
+    .await
+    .map_err(ApiError::database)?;
+    Ok(Json(InstrumentPageView {
+        items: instruments.into_iter().map(InstrumentView::from).collect(),
+        total,
+        limit,
+        offset,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -447,6 +719,7 @@ struct SyncInstrumentsRequest {
 #[derive(Debug, Serialize)]
 struct SyncInstrumentsResponse {
     synchronized: BTreeMap<&'static str, usize>,
+    failed: BTreeMap<&'static str, &'static str>,
 }
 
 async fn sync_instruments(
@@ -464,15 +737,27 @@ async fn sync_instruments(
     }))
     .await;
     let mut synchronized = BTreeMap::new();
+    let mut failed = BTreeMap::new();
     for (exchange, result) in requested.into_iter().zip(results) {
-        let instruments = result.map_err(ApiError::gateway)?;
-        let count = instruments.len();
-        ballast_storage::upsert_instruments(&state.database, &instruments)
-            .await
-            .map_err(ApiError::database)?;
-        synchronized.insert(exchange_text(exchange), count);
+        match result {
+            Ok(instruments) => {
+                let count = instruments.len();
+                ballast_storage::upsert_instruments(&state.database, &instruments)
+                    .await
+                    .map_err(ApiError::database)?;
+                synchronized.insert(exchange_text(exchange), count);
+            }
+            Err(error) => {
+                tracing::warn!(exchange = exchange_text(exchange), %error, "instrument synchronization failed");
+                failed.insert(exchange_text(exchange), "gateway_unavailable");
+            }
+        }
     }
-    Ok(Json(SyncInstrumentsResponse { synchronized }))
+    let Json(_) = list_exchanges(State(state)).await?;
+    Ok(Json(SyncInstrumentsResponse {
+        synchronized,
+        failed,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -647,24 +932,28 @@ async fn list_slices(
 struct EventQuery {
     after_sequence: Option<i64>,
     limit: Option<i64>,
+    task_id: Option<Uuid>,
 }
 
 async fn list_events(
     State(state): State<AppState>,
     Query(query): Query<EventQuery>,
 ) -> ApiResult<Json<Vec<EventView>>> {
-    Ok(Json(
+    let limit = query.limit.unwrap_or(500).clamp(1, 1_000);
+    let events = if let Some(task_id) = query.task_id {
+        ballast_storage::list_task_events(&state.database, task_id, limit)
+            .await
+            .map_err(ApiError::database)?
+    } else {
         ballast_storage::list_events_after(
             &state.database,
             query.after_sequence.unwrap_or(0).max(0),
-            query.limit.unwrap_or(500).clamp(1, 1_000),
+            limit,
         )
         .await
         .map_err(ApiError::database)?
-        .into_iter()
-        .map(EventView::from)
-        .collect(),
-    ))
+    };
+    Ok(Json(events.into_iter().map(EventView::from).collect()))
 }
 
 async fn websocket(
@@ -672,11 +961,33 @@ async fn websocket(
     Query(query): Query<EventQuery>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    upgrade
-        .on_upgrade(move |socket| stream_events(socket, state, query.after_sequence.unwrap_or(0)))
+    upgrade.on_upgrade(move |socket| stream_events(socket, state, query.after_sequence))
 }
 
-async fn stream_events(mut socket: WebSocket, state: AppState, mut cursor: i64) {
+async fn stream_events(mut socket: WebSocket, state: AppState, after_sequence: Option<i64>) {
+    let latest_sequence = match sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(sequence), 0)::bigint FROM execution_events",
+    )
+    .fetch_one(&state.database)
+    .await
+    {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            tracing::error!(%error, "websocket initial event cursor query failed");
+            return;
+        }
+    };
+    let mut cursor = after_sequence
+        .map(|sequence| sequence.max(0).min(latest_sequence))
+        .unwrap_or(latest_sequence);
+    let ready = json!({ "type": "stream_ready", "data": { "after_sequence": cursor } });
+    if socket
+        .send(Message::Text(ready.to_string().into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     let mut health_counter = 0_u8;
     loop {
@@ -699,12 +1010,18 @@ async fn stream_events(mut socket: WebSocket, state: AppState, mut cursor: i64) 
                 }
                 health_counter = health_counter.wrapping_add(1);
                 if health_counter.is_multiple_of(10) {
-                    let gateway_status = state.gateway.health().await
-                        .map(|value| value.status)
-                        .unwrap_or_else(|_| "unavailable".to_owned());
+                    let gateway_ready = sqlx::query_scalar::<_, bool>(
+                        "SELECT COALESCE(bool_and(status IN ('ready', 'ok', 'idle')), false) FROM exchange_health"
+                    )
+                    .fetch_one(&state.database)
+                    .await
+                    .unwrap_or(false);
                     let message = json!({
                         "type": "market_health",
-                        "data": { "gateway_status": gateway_status, "observed_at": Utc::now() }
+                        "data": {
+                            "gateway_status": if gateway_ready { "ready" } else { "degraded" },
+                            "observed_at": Utc::now()
+                        }
                     });
                     if socket.send(Message::Text(message.to_string().into())).await.is_err() {
                         return;
@@ -1366,15 +1683,11 @@ async fn operations_dashboard(
         .await
         .map_err(ApiError::database)?
         .into_iter()
-        .filter(|task| {
-            task.status == "paused"
-                || task.status == "failed"
-                || (task.deadline_at - Utc::now()).num_minutes() <= 10
-        })
+        .filter(|task| task_needs_attention(&task.status, task.deadline_at, Utc::now()))
         .take(12)
         .map(TaskView::from)
         .collect();
-    let Json(exchanges) = list_exchanges(State(state)).await?;
+    let exchanges = list_exchange_snapshots(&state).await?;
     Ok(Json(OperationsDashboardView {
         mode: "paper",
         generated_at: Utc::now(),
@@ -1680,6 +1993,27 @@ fn decimal_option(value: Option<Decimal>) -> Option<String> {
     value.map(|value| value.to_string())
 }
 
+fn parse_uuid_list(value: &str) -> ApiResult<Vec<Uuid>> {
+    value
+        .split(',')
+        .filter(|item| !item.is_empty())
+        .map(|item| {
+            Uuid::parse_str(item).map_err(|_| {
+                ApiError::validation("invalid_instrument_id", json!({ "instrument_id": item }))
+            })
+        })
+        .collect()
+}
+
+fn task_needs_attention(status: &str, deadline_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    status == "paused"
+        || status == "failed"
+        || (matches!(
+            status,
+            "pending_approval" | "scheduled" | "running" | "cancelling"
+        ) && deadline_at <= now + chrono::Duration::minutes(10))
+}
+
 fn parse_exchange(value: &str) -> ApiResult<Exchange> {
     match value {
         "binance" => Ok(Exchange::Binance),
@@ -1757,5 +2091,46 @@ const fn quantity_unit_text(value: QuantityUnit) -> &'static str {
         QuantityUnit::BaseQuantity => "base_quantity",
         QuantityUnit::QuoteNotional => "quote_notional",
         QuantityUnit::Contracts => "contracts",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_needs_attention;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn attention_queue_excludes_terminal_tasks_with_past_deadlines() {
+        let now = Utc::now();
+        assert!(!task_needs_attention(
+            "completed",
+            now - Duration::hours(1),
+            now
+        ));
+        assert!(!task_needs_attention(
+            "cancelled",
+            now - Duration::hours(1),
+            now
+        ));
+        assert!(task_needs_attention(
+            "running",
+            now + Duration::minutes(5),
+            now
+        ));
+        assert!(!task_needs_attention(
+            "running",
+            now + Duration::minutes(20),
+            now
+        ));
+        assert!(task_needs_attention(
+            "paused",
+            now + Duration::hours(1),
+            now
+        ));
+        assert!(task_needs_attention(
+            "failed",
+            now - Duration::hours(1),
+            now
+        ));
     }
 }

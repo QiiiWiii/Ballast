@@ -378,9 +378,38 @@ async fn process_task(
     let native_quantity =
         instrument.target_to_native_quantity(requested_slice, unit, conversion_price)?;
     if !is_native_quantity_executable(&instrument, native_quantity, reference_price)? {
-        info!(task_id = %task.id, residual = %remaining, "completing task with non-executable residual");
-        ballast_storage::mark_task_state(database, task.id, "completed", None, task.deadline_at)
+        let residual_native =
+            instrument.target_to_native_quantity(remaining, unit, conversion_price)?;
+        let task_status =
+            task_state_for_non_executable_slice(&instrument, residual_native, reference_price)?;
+        if task_status == "running" {
+            ballast_storage::defer_task_tick(
+                database,
+                task.id,
+                next_tick(&task, now),
+                serde_json::json!({
+                    "reason": "below_minimum_slice",
+                    "requested_amount": requested_slice.to_string(),
+                    "native_quantity": native_quantity.to_string(),
+                    "residual_amount": remaining.to_string(),
+                    "residual_native_quantity": residual_native.to_string(),
+                    "minimum_quantity": instrument.minimum_quantity.map(|value| value.to_string()),
+                    "minimum_notional": instrument.minimum_notional.map(|value| value.to_string()),
+                    "reference_price": reference_price.to_string(),
+                }),
+            )
             .await?;
+        } else {
+            info!(task_id = %task.id, residual = %remaining, "completing task with non-executable residual");
+            ballast_storage::mark_task_state(
+                database,
+                task.id,
+                "completed",
+                None,
+                task.deadline_at,
+            )
+            .await?;
+        }
         return Ok(());
     }
     let bids: Vec<_> = order_book
@@ -514,13 +543,29 @@ fn is_native_quantity_executable(
     Ok(true)
 }
 
+fn task_state_for_non_executable_slice(
+    instrument: &Instrument,
+    residual_native: Decimal,
+    reference_price: Decimal,
+) -> Result<&'static str, ballast_core::DomainError> {
+    Ok(
+        if is_native_quantity_executable(instrument, residual_native, reference_price)? {
+            "running"
+        } else {
+            "completed"
+        },
+    )
+}
+
 async fn pause_task(
     database: &DatabasePool,
     task: &StoredExecutionTask,
     reason: &'static str,
     metrics: &AppMetrics,
 ) -> Result<(), sqlx::Error> {
-    metrics.paused_tasks.with_label_values(&[reason]).inc();
+    if task.status != "paused" || task.paused_reason.as_deref() != Some(reason) {
+        metrics.paused_tasks.with_label_values(&[reason]).inc();
+    }
     ballast_storage::mark_task_state(
         database,
         task.id,
@@ -571,5 +616,43 @@ fn parse_quantity_unit(value: &str) -> Result<QuantityUnit, &'static str> {
         "quote_notional" => Ok(QuantityUnit::QuoteNotional),
         "contracts" => Ok(QuantityUnit::Contracts),
         _ => Err("invalid task quantity unit"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ballast_core::{Exchange, InstrumentId, MarketKind};
+
+    use super::*;
+
+    #[test]
+    fn waits_when_twap_slice_is_too_small_but_total_residual_is_executable() {
+        let instrument = Instrument {
+            id: InstrumentId::new(Exchange::Okx, MarketKind::Spot, "BTC/USDT").unwrap(),
+            exchange_symbol: "BTC-USDT".to_owned(),
+            base_asset: "BTC".to_owned(),
+            quote_asset: "USDT".to_owned(),
+            settle_asset: None,
+            contract_kind: None,
+            contract_size: None,
+            price_tick: Decimal::new(1, 1),
+            quantity_step: Decimal::new(1, 8),
+            minimum_quantity: Some(Decimal::new(1, 5)),
+            minimum_notional: None,
+            maker_fee_rate: None,
+            taker_fee_rate: None,
+            active: true,
+        };
+        let reference_price = Decimal::new(64_500, 0);
+
+        assert!(
+            !is_native_quantity_executable(&instrument, Decimal::new(8, 6), reference_price,)
+                .unwrap()
+        );
+        assert_eq!(
+            task_state_for_non_executable_slice(&instrument, Decimal::new(4, 5), reference_price,)
+                .unwrap(),
+            "running"
+        );
     }
 }

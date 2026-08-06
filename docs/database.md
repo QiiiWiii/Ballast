@@ -27,3 +27,5 @@ Node 网关不维护权威业务数据库。网关重启后由 Rust 使用订单
 - 单次、短时 WebSocket ticket 的哈希与消费状态。
 
 live 任务从 `pending_approval` 开始；创建者与批准者必须不同。审批只改变调度资格，不替代提交前的风险检查。
+
+`0005_exchange_health_current_latency.sql` 在 `exchange_health` 快照中保存最近一次实际探测耗时。状态迁移历史继续只记录状态或错误码变化，运营页面不再从历史事件推断当前延迟。

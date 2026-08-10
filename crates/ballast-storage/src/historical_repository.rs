@@ -268,7 +268,7 @@ async fn update_progress(
     sqlx::query(
         r#"
         UPDATE historical_backfill_jobs SET
-            cursor_at = GREATEST(cursor_at, $2),
+            cursor_at = CASE WHEN $6 THEN end_at ELSE GREATEST(cursor_at, $2) END,
             covered_from = CASE WHEN $3::timestamptz IS NULL THEN covered_from ELSE LEAST(COALESCE(covered_from, $3), $3) END,
             covered_to = CASE WHEN $4::timestamptz IS NULL THEN covered_to ELSE GREATEST(COALESCE(covered_to, $4), $4) END,
             rows_written = rows_written + $5,

@@ -7,7 +7,7 @@ Ballast 可以在 PostgreSQL 已保存的真实逐笔成交上运行可重复的
 - 输入绑定不可变的策略模板版本，并保存完整参数快照、执行模型版本和成本假设。
 - 执行前必须存在覆盖完整请求区间的 `completed` 逐笔成交补数任务。没有补数、补数失败/未完成或时间范围覆盖不足分别返回稳定的 `409` 错误，不会生成高可信度结果。
 - 每条历史成交有数据库分配的单调 `ingestion_id`。回放在只读 `REPEATABLE READ` 事务中冻结 PostgreSQL snapshot 和当前区间的最大 `ingestion_id`，之后按 `trade_time + exchange_trade_id` keyset 分页且只读取该上界以内的数据；并发补数不会让分页跳过或混入成交，未提交事务也不会在后续页面突然出现。
-- 运行保存数据快照谓词（PostgreSQL snapshot、隔离级别、标的、区间、最大 `ingestion_id`、排序、数量和首尾键）及参与覆盖判定的补数任务快照，因此可识别并复核本次使用的精确数据集。
+- 运行保存数据快照谓词（PostgreSQL snapshot、隔离级别、标的、区间、最大 `ingestion_id`、排序、数量和首尾键）、参与覆盖判定的补数任务快照，以及当次计算使用的完整 instrument 规格快照。后续同步修改合约类型、合约面值、数量步长、资产或费率时，不会改写旧运行的计算依据。
 - 历史成交数量沿用网关的 native quantity 语义，并通过 `Instrument` 的实时执行转换规则处理 base、quote 和 contracts。
 - 空窗口不会合成成交；无数据运行保存为 `failed / historical_trades_not_found`。
 - 首尾覆盖不足、超过阈值的内部时间缺口、空窗口或残余量会使运行成为 `completed_with_warnings`，可信度为 `limited`。

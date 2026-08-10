@@ -372,6 +372,7 @@ async fn replay_results_are_atomic_and_idempotent() {
         extra_slippage_bps: Decimal::new(5, 0),
         gap_threshold_seconds: 60,
         strategy_snapshot: serde_json::json!({ "version": 1 }),
+        instrument_snapshot: serde_json::json!({ "version": 1, "instrument": instrument.instrument }),
         data_snapshot: serde_json::json!({ "version": 1, "maximum_ingestion_id": 0 }),
         coverage_snapshot: serde_json::json!({ "version": 1, "jobs": [] }),
         request_fingerprint: "stable-fingerprint".to_owned(),

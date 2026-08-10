@@ -78,6 +78,7 @@ struct ReplayRunView {
     extra_slippage_bps: String,
     gap_threshold_seconds: i64,
     strategy_snapshot: Value,
+    instrument_snapshot: Value,
     data_snapshot: Value,
     coverage_snapshot: Value,
     status: String,
@@ -234,6 +235,12 @@ async fn create_replay(
         "max_slice_amount": template.max_slice_amount.map(|value| value.to_string()),
         "execution_backend": template.execution_backend,
     });
+    let instrument_snapshot = json!({
+        "version": 1,
+        "database_id": instrument.id,
+        "observed_at": instrument.observed_at,
+        "instrument": &instrument.instrument,
+    });
     let result = replay_trade_vwap_proxy(
         &ReplayConfig {
             instrument: instrument.instrument,
@@ -275,6 +282,7 @@ async fn create_replay(
             extra_slippage_bps,
             gap_threshold_seconds,
             strategy_snapshot,
+            instrument_snapshot,
             data_snapshot: loaded.snapshot,
             coverage_snapshot,
             request_fingerprint: request_fingerprint.clone(),
@@ -669,6 +677,7 @@ impl From<StoredReplayRun> for ReplayRunView {
             extra_slippage_bps: value.extra_slippage_bps.to_string(),
             gap_threshold_seconds: value.gap_threshold_seconds,
             strategy_snapshot: value.strategy_snapshot,
+            instrument_snapshot: value.instrument_snapshot,
             data_snapshot: value.data_snapshot,
             coverage_snapshot: value.coverage_snapshot,
             status: value.status,
@@ -818,6 +827,12 @@ mod tests {
                 .unwrap_err(),
             "replay_history_coverage_insufficient"
         );
+        let mut falsely_completed = backfill("completed", start, end);
+        falsely_completed.cursor_at = middle;
+        assert_eq!(
+            select_trade_coverage(&[falsely_completed], start, end).unwrap_err(),
+            "replay_history_coverage_insufficient"
+        );
     }
 
     #[tokio::test]
@@ -830,26 +845,27 @@ mod tests {
         ballast_storage::migrate(&pool).await.unwrap();
         let suffix = Utc::now().timestamp_nanos_opt().unwrap();
         let symbol = format!("API-REPLAY/USDT-{suffix}");
-        let instrument = Instrument {
-            id: InstrumentId::new(Exchange::Okx, MarketKind::Spot, &symbol).unwrap(),
+        let original_instrument = Instrument {
+            id: InstrumentId::new(Exchange::Okx, MarketKind::Perpetual, &symbol).unwrap(),
             exchange_symbol: format!("APIREPLAYUSDT{suffix}"),
             base_asset: "API-REPLAY".to_owned(),
-            quote_asset: "USDT".to_owned(),
-            settle_asset: None,
-            contract_kind: None,
-            contract_size: None,
+            quote_asset: "USD".to_owned(),
+            settle_asset: Some("API-REPLAY".to_owned()),
+            contract_kind: Some(ballast_core::ContractKind::Inverse),
+            contract_size: Some(Decimal::new(100, 0)),
             price_tick: Decimal::new(1, 2),
-            quantity_step: Decimal::new(1, 3),
+            quantity_step: Decimal::ONE,
             minimum_quantity: None,
             minimum_notional: None,
             maker_fee_rate: None,
             taker_fee_rate: Some(Decimal::new(1, 3)),
             active: true,
         };
-        let instrument = ballast_storage::upsert_instruments(&pool, &[instrument])
-            .await
-            .unwrap()
-            .remove(0);
+        let instrument =
+            ballast_storage::upsert_instruments(&pool, std::slice::from_ref(&original_instrument))
+                .await
+                .unwrap()
+                .remove(0);
         let (_, template) = ballast_storage::create_strategy_template(
             &pool,
             NewStrategyTemplate {
@@ -912,19 +928,24 @@ mod tests {
                     observed_at: Utc::now(),
                 },
             ],
-            end,
+            start + Duration::seconds(11),
             true,
         )
         .await
         .unwrap();
+        let completed_backfill = ballast_storage::get_historical_backfill(&pool, backfill.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed_backfill.cursor_at, end);
         let state = crate::AppState {
-            database: pool,
+            database: pool.clone(),
             gateway: ballast_gateway_client::GatewayClient::connect_lazy("http://127.0.0.1:1"),
             metrics: crate::metrics::AppMetrics::new().unwrap(),
         };
         let request = CreateReplayRequest {
             exchange: "okx".to_owned(),
-            market_kind: "spot".to_owned(),
+            market_kind: "perpetual".to_owned(),
             symbol,
             template_version_id: template.id,
             side: "buy".to_owned(),
@@ -934,17 +955,65 @@ mod tests {
             end_at: end,
             idempotency_key: format!("api-replay-{suffix}"),
             execution_model: "trade_vwap_proxy".to_owned(),
-            fee_rate: Some("0.001".to_owned()),
+            fee_rate: None,
             extra_slippage_bps: Some("0".to_owned()),
             gap_threshold_seconds: Some(20),
         };
         let mut conflicting = request.clone();
-        conflicting.fee_rate = Some("0.002".to_owned());
+        conflicting.extra_slippage_bps = Some("1".to_owned());
         let (first, second) = tokio::join!(
             create_replay(State(state.clone()), Json(request)),
             create_replay(State(state), Json(conflicting)),
         );
         let outcomes = [first, second];
+        let successful = outcomes
+            .iter()
+            .find_map(|outcome| outcome.as_ref().ok())
+            .expect("one replay request must succeed");
+        assert_eq!(successful.0.fee_rate, "0.001000000000000000");
+        assert_eq!(
+            successful.0.instrument_snapshot["instrument"]["contract_kind"],
+            "inverse"
+        );
+        assert_eq!(
+            successful.0.instrument_snapshot["instrument"]["contract_size"],
+            "100.000000000000000000"
+        );
+        assert_eq!(
+            successful.0.instrument_snapshot["instrument"]["quantity_step"],
+            "1.000000000000000000"
+        );
+        let run_id = successful.0.id;
+
+        let mut changed_instrument = original_instrument;
+        changed_instrument.base_asset = "CHANGED-BASE".to_owned();
+        changed_instrument.quote_asset = "USDT".to_owned();
+        changed_instrument.settle_asset = Some("USDT".to_owned());
+        changed_instrument.contract_kind = Some(ballast_core::ContractKind::Linear);
+        changed_instrument.contract_size = Some(Decimal::new(1, 2));
+        changed_instrument.quantity_step = Decimal::new(1, 3);
+        changed_instrument.taker_fee_rate = Some(Decimal::new(2, 3));
+        ballast_storage::upsert_instruments(&pool, &[changed_instrument])
+            .await
+            .unwrap();
+        let stored = ballast_storage::get_replay_run(&pool, run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.fee_rate, Decimal::new(1, 3));
+        assert_eq!(stored.instrument_snapshot, successful.0.instrument_snapshot);
+        assert_eq!(
+            stored.instrument_snapshot["instrument"]["base_asset"],
+            "API-REPLAY"
+        );
+        assert_eq!(
+            stored.instrument_snapshot["instrument"]["quote_asset"],
+            "USD"
+        );
+        assert_eq!(
+            stored.instrument_snapshot["instrument"]["settle_asset"],
+            "API-REPLAY"
+        );
         let errors = outcomes
             .iter()
             .filter_map(|result| {

@@ -31,6 +31,7 @@ pub struct NewReplayRun {
     pub extra_slippage_bps: Decimal,
     pub gap_threshold_seconds: i64,
     pub strategy_snapshot: Value,
+    pub instrument_snapshot: Value,
     pub data_snapshot: Value,
     pub coverage_snapshot: Value,
     pub request_fingerprint: String,
@@ -100,6 +101,7 @@ pub struct StoredReplayRun {
     pub extra_slippage_bps: Decimal,
     pub gap_threshold_seconds: i64,
     pub strategy_snapshot: Value,
+    pub instrument_snapshot: Value,
     pub data_snapshot: Value,
     pub coverage_snapshot: Value,
     pub request_fingerprint: String,
@@ -168,13 +170,14 @@ pub async fn create_replay_result(
             id, idempotency_key, instrument_id, template_version_id, strategy_kind,
             side, requested_amount, quantity_unit, start_at, end_at, execution_model,
             model_version, fee_rate, extra_slippage_bps, gap_threshold_seconds,
-            strategy_snapshot, data_snapshot, coverage_snapshot, request_fingerprint,
+            strategy_snapshot, instrument_snapshot, data_snapshot, coverage_snapshot,
+            request_fingerprint,
             status, failure_code, data_first_at,
             data_last_at, trade_count, gap_count, data_gaps, confidence, limitations
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
             $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-            $26, $27, $28
+            $26, $27, $28, $29
         ) ON CONFLICT (idempotency_key) DO NOTHING
         "#,
     )
@@ -194,6 +197,7 @@ pub async fn create_replay_result(
     .bind(run.extra_slippage_bps)
     .bind(run.gap_threshold_seconds)
     .bind(&run.strategy_snapshot)
+    .bind(&run.instrument_snapshot)
     .bind(&run.data_snapshot)
     .bind(&run.coverage_snapshot)
     .bind(&run.request_fingerprint)
@@ -351,6 +355,7 @@ fn row_to_run(row: &sqlx::postgres::PgRow) -> Result<StoredReplayRun, sqlx::Erro
         extra_slippage_bps: row.try_get("extra_slippage_bps")?,
         gap_threshold_seconds: row.try_get("gap_threshold_seconds")?,
         strategy_snapshot: row.try_get("strategy_snapshot")?,
+        instrument_snapshot: row.try_get("instrument_snapshot")?,
         data_snapshot: row.try_get("data_snapshot")?,
         coverage_snapshot: row.try_get("coverage_snapshot")?,
         request_fingerprint: row.try_get("request_fingerprint")?,

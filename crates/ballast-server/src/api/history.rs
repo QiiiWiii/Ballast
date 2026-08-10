@@ -149,7 +149,7 @@ async fn run_backfill(
             }
         };
         let next_cursor = millis(response.next_cursor_ms, "next_cursor_ms")?;
-        if !response.exhausted && next_cursor <= cursor {
+        if let Err(error) = validate_historical_cursor(cursor, next_cursor, response.exhausted) {
             ballast_storage::mark_historical_backfill_failed(
                 &state.database,
                 created.id,
@@ -157,7 +157,7 @@ async fn run_backfill(
             )
             .await
             .map_err(ApiError::database)?;
-            return Err(ApiError::internal("historical_cursor_not_advanced"));
+            return Err(error);
         }
         let observed_at = millis(response.observed_at_ms, "observed_at_ms")?;
         if data_type == HistoricalDataType::Ohlcv {
@@ -502,6 +502,17 @@ fn timeframe_duration(value: &str) -> ApiResult<Duration> {
     }
 }
 
+fn validate_historical_cursor(
+    cursor: DateTime<Utc>,
+    next_cursor: DateTime<Utc>,
+    exhausted: bool,
+) -> ApiResult<()> {
+    if !exhausted && next_cursor <= cursor {
+        return Err(ApiError::internal("historical_cursor_not_advanced"));
+    }
+    Ok(())
+}
+
 fn parse_market_kind(value: &str) -> ApiResult<MarketKind> {
     match value {
         "spot" => Ok(MarketKind::Spot),
@@ -618,5 +629,12 @@ mod tests {
         assert_eq!(gaps[0].start_at, start);
         assert_eq!(gaps[1].start_at, start + Duration::minutes(2));
         assert_eq!(gaps[2].end_at, start + Duration::minutes(5));
+    }
+
+    #[test]
+    fn rejects_saturated_trade_page_without_advancing_past_its_millisecond() {
+        let cursor = DateTime::from_timestamp_millis(1_001).unwrap();
+        assert!(validate_historical_cursor(cursor, cursor, false).is_err());
+        assert!(validate_historical_cursor(cursor, cursor, true).is_ok());
     }
 }

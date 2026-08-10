@@ -60,6 +60,30 @@ test("historical pagination advances and clamps to the requested boundary", () =
   assert.equal(nextHistoricalCursor([1_000], 1_000, 5_000, 0), 1_000);
 });
 
+test("saturated same-millisecond trade pages never skip to the next millisecond", () => {
+  const upstream = [
+    { id: "a", timestamp: 1_000 },
+    { id: "b", timestamp: 1_001 },
+    { id: "c", timestamp: 1_001 },
+    { id: "d-unseen", timestamp: 1_001 },
+  ];
+  const firstPage = upstream.slice(0, 3);
+  const firstCursor = nextHistoricalCursor(
+    firstPage.map((trade) => trade.timestamp), 1_000, 5_000, 0,
+  );
+  assert.equal(firstCursor, 1_001);
+  assert.notEqual(firstCursor, 1_002);
+  assert.deepEqual(
+    upstream.filter((trade) => trade.timestamp >= firstCursor).map((trade) => trade.id),
+    ["b", "c", "d-unseen"],
+  );
+
+  const repeatedCursor = nextHistoricalCursor(
+    [1_001, 1_001, 1_001], firstCursor, 5_000, 0,
+  );
+  assert.equal(repeatedCursor, firstCursor);
+});
+
 test("read-only historical calls retry transient failures", async () => {
   let attempts = 0;
   const value = await withReadRetry(async () => {

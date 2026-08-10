@@ -122,7 +122,7 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
       .filter((row) => row.tradeTimeMs >= cursorMs && row.tradeTimeMs < endMs)
       .sort((left, right) => left.tradeTimeMs - right.tradeTimeMs || left.exchangeTradeId.localeCompare(right.exchangeTradeId));
     const nextCursorMs = nextHistoricalCursor(
-      trades.map((row) => row.tradeTimeMs), cursorMs, endMs, 1,
+      trades.map((row) => row.tradeTimeMs), cursorMs, endMs, 0,
     );
     return {
       candles: [],

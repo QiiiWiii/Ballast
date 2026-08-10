@@ -30,8 +30,11 @@ use uuid::Uuid;
 
 use crate::AppState;
 
+mod history;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(history::routes())
         .route("/api/v1/exchanges", get(list_exchanges))
         .route("/api/v1/exchanges/snapshots", get(exchange_snapshots))
         .route("/api/v1/exchanges/{exchange}", get(get_exchange))
@@ -176,6 +179,8 @@ struct CapabilitiesView {
     fetch_order_book: bool,
     watch_order_book: bool,
     watch_trades: bool,
+    fetch_ohlcv: bool,
+    fetch_trades: bool,
 }
 
 async fn list_exchanges(State(state): State<AppState>) -> ApiResult<Json<Vec<ExchangeView>>> {
@@ -204,6 +209,8 @@ async fn list_exchanges(State(state): State<AppState>) -> ApiResult<Json<Vec<Exc
             fetch_order_book: value.fetch_order_book,
             watch_order_book: value.watch_order_book,
             watch_trades: value.watch_trades,
+            fetch_ohlcv: value.fetch_ohlcv,
+            fetch_trades: value.fetch_trades,
         });
         let key = exchange_proto_number(exchange);
         let adapter = health_by_exchange.remove(&key);
@@ -541,6 +548,8 @@ async fn get_exchange(
             fetch_order_book: value.fetch_order_book,
             watch_order_book: value.watch_order_book,
             watch_trades: value.watch_trades,
+            fetch_ohlcv: value.fetch_ohlcv,
+            fetch_trades: value.fetch_trades,
         }),
     }))
 }

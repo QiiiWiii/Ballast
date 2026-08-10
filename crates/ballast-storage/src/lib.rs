@@ -2,13 +2,21 @@
 
 use sqlx::postgres::PgPoolOptions;
 
+mod historical_repository;
 mod instrument_repository;
 mod live_repository;
 mod strategy_repository;
 mod task_repository;
 
+pub use historical_repository::{
+    HistoricalCandle, HistoricalTrade, NewHistoricalBackfill, StoredHistoricalBackfill,
+    create_or_get_historical_backfill, get_historical_backfill, list_historical_candles,
+    list_historical_trades, mark_historical_backfill_failed, mark_historical_backfill_running,
+    persist_candle_batch, persist_trade_batch,
+};
 pub use instrument_repository::{
-    StoredInstrument, get_instrument, list_instruments, list_instruments_page, upsert_instruments,
+    StoredInstrument, get_instrument, get_instrument_by_key, list_instruments,
+    list_instruments_page, upsert_instruments,
 };
 pub use live_repository::{
     StoredAccount, StoredRiskDecision, StoredTaskApproval, approve_task, list_accounts,

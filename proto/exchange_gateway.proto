@@ -7,8 +7,15 @@ service MarketDataService {
   rpc ListInstruments(ListInstrumentsRequest) returns (ListInstrumentsResponse);
   rpc GetCapabilities(GetCapabilitiesRequest) returns (ExchangeCapabilities);
   rpc GetOrderBook(GetOrderBookRequest) returns (OrderBook);
+  rpc FetchHistoricalBatch(FetchHistoricalBatchRequest) returns (FetchHistoricalBatchResponse);
   rpc WatchOrderBook(WatchMarketRequest) returns (stream OrderBookStreamEvent);
   rpc WatchTrades(WatchMarketRequest) returns (stream TradeStreamEvent);
+}
+
+enum HistoricalDataType {
+  HISTORICAL_DATA_TYPE_UNSPECIFIED = 0;
+  HISTORICAL_DATA_TYPE_OHLCV = 1;
+  HISTORICAL_DATA_TYPE_TRADES = 2;
 }
 
 enum Exchange {
@@ -111,11 +118,47 @@ message ExchangeCapabilities {
   bool fetch_order_book = 5;
   bool watch_order_book = 6;
   bool watch_trades = 7;
+  bool fetch_ohlcv = 8;
+  bool fetch_trades = 9;
 }
 
 message GetOrderBookRequest {
   InstrumentKey instrument = 1;
   uint32 depth = 2;
+}
+
+message FetchHistoricalBatchRequest {
+  InstrumentKey instrument = 1;
+  HistoricalDataType data_type = 2;
+  optional string timeframe = 3;
+  int64 cursor_ms = 4;
+  int64 end_ms = 5;
+  uint32 limit = 6;
+}
+
+message HistoricalCandle {
+  int64 open_time_ms = 1;
+  string open = 2;
+  string high = 3;
+  string low = 4;
+  string close = 5;
+  string volume = 6;
+}
+
+message HistoricalTrade {
+  string exchange_trade_id = 1;
+  int64 trade_time_ms = 2;
+  string price = 3;
+  string quantity = 4;
+  string taker_side = 5;
+}
+
+message FetchHistoricalBatchResponse {
+  repeated HistoricalCandle candles = 1;
+  repeated HistoricalTrade trades = 2;
+  int64 next_cursor_ms = 3;
+  bool exhausted = 4;
+  int64 observed_at_ms = 5;
 }
 
 message WatchMarketRequest {

@@ -2,8 +2,9 @@ use ballast_core::{
     Exchange, Instrument, InstrumentId, MarketKind, QuantityUnit, Side, StrategyKind,
 };
 use ballast_storage::{
-    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewReplayMetrics, NewReplayRun,
-    NewReplaySlice, NewStrategyTemplate, NewStrategyTemplateVersion, SliceRecord,
+    CreateReplayError, HistoricalCandle, HistoricalTrade, NewExecutionTask, NewHistoricalBackfill,
+    NewReplayMetrics, NewReplayRun, NewReplaySlice, NewStrategyTemplate,
+    NewStrategyTemplateVersion, SliceRecord,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -371,6 +372,8 @@ async fn replay_results_are_atomic_and_idempotent() {
         extra_slippage_bps: Decimal::new(5, 0),
         gap_threshold_seconds: 60,
         strategy_snapshot: serde_json::json!({ "version": 1 }),
+        data_snapshot: serde_json::json!({ "version": 1, "maximum_ingestion_id": 0 }),
+        coverage_snapshot: serde_json::json!({ "version": 1, "jobs": [] }),
         request_fingerprint: "stable-fingerprint".to_owned(),
         status: "completed".to_owned(),
         failure_code: None,
@@ -416,12 +419,12 @@ async fn replay_results_are_atomic_and_idempotent() {
         explicit_slippage_amount: Decimal::new(5, 2),
     };
 
-    let first = ballast_storage::create_replay_result(&pool, &run, &slices, &metrics)
-        .await
-        .unwrap();
-    let duplicate = ballast_storage::create_replay_result(&pool, &run, &slices, &metrics)
-        .await
-        .unwrap();
+    let (first, duplicate) = tokio::join!(
+        ballast_storage::create_replay_result(&pool, &run, &slices, &metrics),
+        ballast_storage::create_replay_result(&pool, &run, &slices, &metrics),
+    );
+    let first = first.unwrap();
+    let duplicate = duplicate.unwrap();
     assert_eq!(first.id, duplicate.id);
     assert_eq!(
         ballast_storage::list_replay_slices(&pool, first.id)
@@ -435,6 +438,13 @@ async fn replay_results_are_atomic_and_idempotent() {
         .unwrap()
         .unwrap();
     assert_eq!(stored_metrics.fill_rate, Decimal::ONE);
+
+    let mut conflicting = run.clone();
+    conflicting.request_fingerprint = "different-fingerprint".to_owned();
+    let error = ballast_storage::create_replay_result(&pool, &conflicting, &slices, &metrics)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CreateReplayError::IdempotencyConflict));
 }
 
 #[tokio::test]
@@ -531,5 +541,120 @@ async fn historical_backfill_is_resumable_and_deduplicated() {
     assert_eq!(
         completed.cursor_at.timestamp_micros(),
         end.timestamp_micros()
+    );
+}
+
+#[tokio::test]
+async fn historical_trade_snapshot_excludes_concurrent_earlier_inserts() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+        return;
+    };
+    let pool = ballast_storage::connect(&database_url).await.unwrap();
+    ballast_storage::migrate(&pool).await.unwrap();
+    let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    let instrument = Instrument {
+        id: InstrumentId::new(
+            Exchange::Okx,
+            MarketKind::Spot,
+            format!("SNAPSHOT/USDT-{suffix}"),
+        )
+        .unwrap(),
+        exchange_symbol: format!("SNAPSHOTUSDT{suffix}"),
+        base_asset: "SNAPSHOT".to_owned(),
+        quote_asset: "USDT".to_owned(),
+        settle_asset: None,
+        contract_kind: None,
+        contract_size: None,
+        price_tick: Decimal::new(1, 2),
+        quantity_step: Decimal::new(1, 3),
+        minimum_quantity: None,
+        minimum_notional: None,
+        maker_fee_rate: None,
+        taker_fee_rate: None,
+        active: true,
+    };
+    let instrument = ballast_storage::upsert_instruments(&pool, &[instrument])
+        .await
+        .unwrap()
+        .remove(0);
+    let start = Utc::now() - Duration::minutes(10);
+    let end = start + Duration::minutes(1);
+    let job = ballast_storage::create_or_get_historical_backfill(
+        &pool,
+        &NewHistoricalBackfill {
+            idempotency_key: format!("snapshot-history-{suffix}"),
+            instrument_id: instrument.id,
+            data_type: "trades".to_owned(),
+            timeframe: None,
+            start_at: start,
+            end_at: end,
+        },
+    )
+    .await
+    .unwrap();
+    let trade = |id: &str, seconds: i64| HistoricalTrade {
+        exchange_trade_id: id.to_owned(),
+        trade_time: start + Duration::seconds(seconds),
+        price: Decimal::new(100, 0),
+        quantity: Decimal::ONE,
+        taker_side: "buy".to_owned(),
+        source: "okx".to_owned(),
+        observed_at: Utc::now(),
+    };
+    ballast_storage::persist_trade_batch(
+        &pool,
+        job.id,
+        instrument.id,
+        &[trade("a", 10), trade("c", 30)],
+        end,
+        true,
+    )
+    .await
+    .unwrap();
+    let watermark =
+        ballast_storage::historical_trade_snapshot_high_watermark(&pool, instrument.id, start, end)
+            .await
+            .unwrap();
+    ballast_storage::persist_trade_batch(
+        &pool,
+        job.id,
+        instrument.id,
+        &[trade("b-late", 20)],
+        end,
+        true,
+    )
+    .await
+    .unwrap();
+
+    let first = ballast_storage::list_historical_trade_page(
+        &pool,
+        instrument.id,
+        start,
+        end,
+        watermark,
+        None,
+        1,
+    )
+    .await
+    .unwrap();
+    let second = ballast_storage::list_historical_trade_page(
+        &pool,
+        instrument.id,
+        start,
+        end,
+        watermark,
+        Some((first[0].trade_time, first[0].exchange_trade_id.clone())),
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first[0].exchange_trade_id, "a");
+    assert_eq!(
+        second
+            .iter()
+            .map(|trade| trade.exchange_trade_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["c"]
     );
 }

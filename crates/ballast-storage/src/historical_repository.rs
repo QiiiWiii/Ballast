@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{Executor, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::DatabasePool;
@@ -93,6 +93,33 @@ pub async fn get_historical_backfill(
         .as_ref()
         .map(row_to_backfill)
         .transpose()
+}
+
+pub async fn list_historical_trade_backfills(
+    pool: &DatabasePool,
+    instrument_id: Uuid,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+) -> Result<Vec<StoredHistoricalBackfill>, sqlx::Error> {
+    sqlx::query(
+        r#"
+        SELECT *
+        FROM historical_backfill_jobs
+        WHERE instrument_id = $1
+          AND data_type = 'trades'
+          AND start_at < $3
+          AND end_at > $2
+        ORDER BY start_at, end_at, created_at
+        "#,
+    )
+    .bind(instrument_id)
+    .bind(start_at)
+    .bind(end_at)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(row_to_backfill)
+    .collect()
 }
 
 async fn get_historical_backfill_by_key(
@@ -331,14 +358,18 @@ pub async fn list_historical_trades(
     ))
 }
 
-pub async fn list_historical_trade_page(
-    pool: &DatabasePool,
+pub async fn list_historical_trade_page<'e, E>(
+    executor: E,
     instrument_id: Uuid,
     start_at: DateTime<Utc>,
     end_at: DateTime<Utc>,
+    snapshot_max_ingestion_id: i64,
     after: Option<(DateTime<Utc>, String)>,
     limit: i64,
-) -> Result<Vec<HistoricalTrade>, sqlx::Error> {
+) -> Result<Vec<HistoricalTrade>, sqlx::Error>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let after_time = after.as_ref().map(|value| value.0);
     let after_id = after.as_ref().map(|value| value.1.as_str());
     sqlx::query(
@@ -346,25 +377,50 @@ pub async fn list_historical_trade_page(
         SELECT *
         FROM historical_trades
         WHERE instrument_id = $1 AND trade_time >= $2 AND trade_time < $3
+          AND ingestion_id <= $4
           AND (
-              $4::timestamptz IS NULL
-              OR (trade_time, exchange_trade_id) > ($4, $5)
+              $5::timestamptz IS NULL
+              OR (trade_time, exchange_trade_id) > ($5, $6)
           )
         ORDER BY trade_time, exchange_trade_id
-        LIMIT $6
+        LIMIT $7
         "#,
     )
     .bind(instrument_id)
     .bind(start_at)
     .bind(end_at)
+    .bind(snapshot_max_ingestion_id)
     .bind(after_time)
     .bind(after_id)
     .bind(limit)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?
     .iter()
     .map(row_to_trade)
     .collect()
+}
+
+pub async fn historical_trade_snapshot_high_watermark<'e, E>(
+    executor: E,
+    instrument_id: Uuid,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+) -> Result<i64, sqlx::Error>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(MAX(ingestion_id), 0)::bigint
+        FROM historical_trades
+        WHERE instrument_id = $1 AND trade_time >= $2 AND trade_time < $3
+        "#,
+    )
+    .bind(instrument_id)
+    .bind(start_at)
+    .bind(end_at)
+    .fetch_one(executor)
+    .await
 }
 
 fn row_to_backfill(row: &sqlx::postgres::PgRow) -> Result<StoredHistoricalBackfill, sqlx::Error> {

@@ -16,7 +16,7 @@
 - `GET /api/v1/replays/{run_id}/slices`
 - `GET /api/v1/replays/{run_id}/metrics`
 
-回放绑定不可变策略模板版本，使用 `trade_vwap_proxy` 处理真实逐笔成交。假设、幂等行为和 OKX TWAP/POV 对比示例见 `docs/replay.md`。
+回放绑定不可变策略模板版本，要求完整且已完成的历史成交补数覆盖，并使用冻结的成交 ingestion 快照运行 `trade_vwap_proxy`。运行响应包含 `data_snapshot` 与 `coverage_snapshot`；覆盖错误、幂等行为、数量单位和 OKX TWAP/POV 对比示例见 `docs/replay.md`。
 
 补数参数包含 `exchange`、`market_kind`、`symbol`、`data_type`、`start_at`、`end_at` 和 `idempotency_key`。OHLCV 还必须提供 `timeframe`。`page_limit` 范围为 1–1000，`max_pages` 范围为 1–100；达到单次页数上限但尚未结束时任务返回 `pending`，用相同请求继续。完整示例与数据边界见 `docs/historical-data.md`。
 

@@ -37,7 +37,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/api/v1/replays/{run_id}/metrics", get(get_replay_metrics))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct CreateReplayRequest {
     exchange: String,
     market_kind: String,
@@ -78,6 +78,8 @@ struct ReplayRunView {
     extra_slippage_bps: String,
     gap_threshold_seconds: i64,
     strategy_snapshot: Value,
+    data_snapshot: Value,
+    coverage_snapshot: Value,
     status: String,
     failure_code: Option<String>,
     data_first_at: Option<DateTime<Utc>>,
@@ -217,7 +219,9 @@ async fn create_replay(
         return Err(ApiError::validation("gap_threshold_invalid", json!({})));
     }
 
-    let trades = load_trades(&state, instrument.id, request.start_at, request.end_at).await?;
+    let coverage_snapshot =
+        require_trade_coverage(&state, instrument.id, request.start_at, request.end_at).await?;
+    let loaded = load_trades(&state, instrument.id, request.start_at, request.end_at).await?;
     let strategy_snapshot = json!({
         "template_version_id": template.id,
         "template_id": template.template_id,
@@ -246,7 +250,7 @@ async fn create_replay(
             extra_slippage_bps,
             gap_threshold: Duration::seconds(gap_threshold_seconds),
         },
-        &trades,
+        &loaded.trades,
     )
     .map_err(|error| {
         tracing::warn!(%error, "replay calculation rejected");
@@ -271,6 +275,8 @@ async fn create_replay(
             extra_slippage_bps,
             gap_threshold_seconds,
             strategy_snapshot,
+            data_snapshot: loaded.snapshot,
+            coverage_snapshot,
             request_fingerprint: request_fingerprint.clone(),
             status: result.status,
             failure_code: result.failure_code,
@@ -327,9 +333,17 @@ async fn create_replay(
         },
     )
     .await
-    .map_err(ApiError::database)?;
-    ensure_idempotency_match(&stored.request_fingerprint, &request_fingerprint)?;
+    .map_err(map_create_replay_error)?;
     Ok(Json(stored.into()))
+}
+
+fn map_create_replay_error(error: ballast_storage::CreateReplayError) -> ApiError {
+    match error {
+        ballast_storage::CreateReplayError::IdempotencyConflict => {
+            ApiError::conflict("replay_idempotency_key_conflict")
+        }
+        ballast_storage::CreateReplayError::Database(error) => ApiError::database(error),
+    }
 }
 
 async fn get_replay(
@@ -383,15 +397,33 @@ async fn load_trades(
     instrument_id: Uuid,
     start_at: DateTime<Utc>,
     end_at: DateTime<Utc>,
-) -> ApiResult<Vec<ReplayTrade>> {
+) -> ApiResult<LoadedTrades> {
+    let mut transaction = state.database.begin().await.map_err(ApiError::database)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *transaction)
+        .await
+        .map_err(ApiError::database)?;
+    let postgres_snapshot: String = sqlx::query_scalar("SELECT pg_current_snapshot()::text")
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(ApiError::database)?;
+    let snapshot_max_ingestion_id = ballast_storage::historical_trade_snapshot_high_watermark(
+        &mut *transaction,
+        instrument_id,
+        start_at,
+        end_at,
+    )
+    .await
+    .map_err(ApiError::database)?;
     let mut result = Vec::new();
     let mut cursor = None;
     loop {
         let page = ballast_storage::list_historical_trade_page(
-            &state.database,
+            &mut *transaction,
             instrument_id,
             start_at,
             end_at,
+            snapshot_max_ingestion_id,
             cursor.clone(),
             TRADE_PAGE_SIZE,
         )
@@ -421,7 +453,107 @@ async fn load_trades(
             break;
         }
     }
-    Ok(result)
+    transaction.commit().await.map_err(ApiError::database)?;
+    let snapshot = json!({
+        "version": 1,
+        "postgres_snapshot": postgres_snapshot,
+        "isolation": "repeatable_read",
+        "instrument_id": instrument_id,
+        "start_at": start_at,
+        "end_at": end_at,
+        "maximum_ingestion_id": snapshot_max_ingestion_id,
+        "ordering": ["trade_time", "exchange_trade_id"],
+        "trade_count": result.len(),
+        "first_trade": result.first().map(|trade| json!({
+            "trade_time": trade.trade_time,
+            "exchange_trade_id": trade.exchange_trade_id,
+        })),
+        "last_trade": result.last().map(|trade| json!({
+            "trade_time": trade.trade_time,
+            "exchange_trade_id": trade.exchange_trade_id,
+        })),
+    });
+    Ok(LoadedTrades {
+        trades: result,
+        snapshot,
+    })
+}
+
+struct LoadedTrades {
+    trades: Vec<ReplayTrade>,
+    snapshot: Value,
+}
+
+async fn require_trade_coverage(
+    state: &AppState,
+    instrument_id: Uuid,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+) -> ApiResult<Value> {
+    let jobs = ballast_storage::list_historical_trade_backfills(
+        &state.database,
+        instrument_id,
+        start_at,
+        end_at,
+    )
+    .await
+    .map_err(ApiError::database)?;
+    if jobs.is_empty() {
+        return Err(ApiError::conflict("replay_history_backfill_required"));
+    }
+
+    let coverage_jobs =
+        select_trade_coverage(&jobs, start_at, end_at).map_err(ApiError::conflict)?;
+
+    Ok(json!({
+        "version": 1,
+        "required_start_at": start_at,
+        "required_end_at": end_at,
+        "jobs": coverage_jobs.into_iter().map(|job| json!({
+            "id": job.id,
+            "idempotency_key": job.idempotency_key,
+            "start_at": job.start_at,
+            "end_at": job.end_at,
+            "cursor_at": job.cursor_at,
+            "covered_from": job.covered_from,
+            "covered_to": job.covered_to,
+            "rows_written": job.rows_written,
+            "status": job.status,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn select_trade_coverage(
+    jobs: &[ballast_storage::StoredHistoricalBackfill],
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+) -> Result<Vec<&ballast_storage::StoredHistoricalBackfill>, &'static str> {
+    let mut covered_until = start_at;
+    let mut coverage_jobs = Vec::new();
+    for job in jobs.iter().filter(|job| job.status == "completed") {
+        if job.start_at > covered_until {
+            continue;
+        }
+        let job_covered_until = job.cursor_at.min(job.end_at);
+        if job_covered_until <= covered_until {
+            continue;
+        }
+        coverage_jobs.push(job);
+        covered_until = job_covered_until;
+        if covered_until >= end_at {
+            return Ok(coverage_jobs);
+        }
+    }
+    if jobs.iter().any(|job| job.status == "failed") {
+        return Err("replay_history_backfill_failed");
+    }
+    if jobs
+        .iter()
+        .any(|job| matches!(job.status.as_str(), "pending" | "running"))
+    {
+        return Err("replay_history_backfill_incomplete");
+    }
+    Err("replay_history_coverage_insufficient")
 }
 
 fn validate_request_shape(request: &CreateReplayRequest) -> ApiResult<()> {
@@ -433,6 +565,14 @@ fn validate_request_shape(request: &CreateReplayRequest) -> ApiResult<()> {
     }
     if request.start_at >= request.end_at {
         return Err(ApiError::validation("time_range_invalid", json!({})));
+    }
+    if request.start_at.timestamp_subsec_nanos() % 1_000 != 0
+        || request.end_at.timestamp_subsec_nanos() % 1_000 != 0
+    {
+        return Err(ApiError::validation(
+            "timestamp_precision_invalid",
+            json!({ "maximum_precision": "microseconds" }),
+        ));
     }
     Ok(())
 }
@@ -529,6 +669,8 @@ impl From<StoredReplayRun> for ReplayRunView {
             extra_slippage_bps: value.extra_slippage_bps.to_string(),
             gap_threshold_seconds: value.gap_threshold_seconds,
             strategy_snapshot: value.strategy_snapshot,
+            data_snapshot: value.data_snapshot,
+            coverage_snapshot: value.coverage_snapshot,
             status: value.status,
             failure_code: value.failure_code,
             data_first_at: value.data_first_at,
@@ -600,9 +742,45 @@ impl From<StoredReplayMetrics> for ReplayMetricsView {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::StatusCode;
+    use ballast_core::{Exchange, Instrument, InstrumentId, MarketKind};
+    use ballast_storage::{HistoricalTrade, NewHistoricalBackfill, NewStrategyTemplate};
+    use chrono::{Duration, Utc};
+    use rust_decimal::Decimal;
+    use uuid::Uuid;
 
-    use super::ensure_idempotency_match;
+    use axum::http::StatusCode;
+    use axum::{Json, extract::State};
+
+    use super::{
+        CreateReplayRequest, create_replay, ensure_idempotency_match, map_create_replay_error,
+        select_trade_coverage,
+    };
+
+    fn backfill(
+        status: &str,
+        start_at: chrono::DateTime<Utc>,
+        end_at: chrono::DateTime<Utc>,
+    ) -> ballast_storage::StoredHistoricalBackfill {
+        ballast_storage::StoredHistoricalBackfill {
+            id: Uuid::now_v7(),
+            idempotency_key: Uuid::now_v7().to_string(),
+            instrument_id: Uuid::now_v7(),
+            data_type: "trades".to_owned(),
+            timeframe: None,
+            start_at,
+            end_at,
+            cursor_at: if status == "completed" {
+                end_at
+            } else {
+                start_at
+            },
+            covered_from: None,
+            covered_to: None,
+            status: status.to_owned(),
+            rows_written: 0,
+            last_error_code: (status == "failed").then(|| "gateway_unavailable".to_owned()),
+        }
+    }
 
     #[test]
     fn idempotency_key_rejects_a_different_replay_request() {
@@ -610,5 +788,182 @@ mod tests {
         assert_eq!(error.status, StatusCode::CONFLICT);
         assert_eq!(error.code, "replay_idempotency_key_conflict");
         assert!(ensure_idempotency_match("same", "same").is_ok());
+        let storage_conflict =
+            map_create_replay_error(ballast_storage::CreateReplayError::IdempotencyConflict);
+        assert_eq!(storage_conflict.status, StatusCode::CONFLICT);
+        assert_eq!(storage_conflict.code, "replay_idempotency_key_conflict");
+    }
+
+    #[test]
+    fn coverage_requires_completed_jobs_across_the_whole_range() {
+        let start = Utc::now();
+        let middle = start + Duration::minutes(1);
+        let end = middle + Duration::minutes(1);
+        let jobs = [
+            backfill("completed", start, middle),
+            backfill("completed", middle, end),
+        ];
+        assert_eq!(select_trade_coverage(&jobs, start, end).unwrap().len(), 2);
+
+        assert_eq!(
+            select_trade_coverage(&[backfill("pending", start, end)], start, end).unwrap_err(),
+            "replay_history_backfill_incomplete"
+        );
+        assert_eq!(
+            select_trade_coverage(&[backfill("failed", start, end)], start, end).unwrap_err(),
+            "replay_history_backfill_failed"
+        );
+        assert_eq!(
+            select_trade_coverage(&[backfill("completed", start, middle)], start, end,)
+                .unwrap_err(),
+            "replay_history_coverage_insufficient"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_returns_conflict_for_a_concurrent_key_reused_with_different_input() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("TEST_DATABASE_URL is not set; skipping replay API integration test");
+            return;
+        };
+        let pool = ballast_storage::connect(&database_url).await.unwrap();
+        ballast_storage::migrate(&pool).await.unwrap();
+        let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+        let symbol = format!("API-REPLAY/USDT-{suffix}");
+        let instrument = Instrument {
+            id: InstrumentId::new(Exchange::Okx, MarketKind::Spot, &symbol).unwrap(),
+            exchange_symbol: format!("APIREPLAYUSDT{suffix}"),
+            base_asset: "API-REPLAY".to_owned(),
+            quote_asset: "USDT".to_owned(),
+            settle_asset: None,
+            contract_kind: None,
+            contract_size: None,
+            price_tick: Decimal::new(1, 2),
+            quantity_step: Decimal::new(1, 3),
+            minimum_quantity: None,
+            minimum_notional: None,
+            maker_fee_rate: None,
+            taker_fee_rate: Some(Decimal::new(1, 3)),
+            active: true,
+        };
+        let instrument = ballast_storage::upsert_instruments(&pool, &[instrument])
+            .await
+            .unwrap()
+            .remove(0);
+        let (_, template) = ballast_storage::create_strategy_template(
+            &pool,
+            NewStrategyTemplate {
+                name: format!("API replay {suffix}"),
+                description: "API replay integration".to_owned(),
+                strategy_kind: "twap".to_owned(),
+                quantity_unit: "base_quantity".to_owned(),
+                duration_seconds: 20,
+                slice_interval_ms: 10_000,
+                max_slippage_bps: 20,
+                participation_rate: None,
+                max_slice_amount: None,
+                change_note: "initial".to_owned(),
+                execution_backend: "managed_ioc".to_owned(),
+                venue_exchange: None,
+                venue_market_kind: None,
+                native_algorithm: None,
+                native_params: None,
+            },
+        )
+        .await
+        .unwrap();
+        let start = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap()
+            - Duration::minutes(5);
+        let end = start + Duration::seconds(20);
+        let backfill = ballast_storage::create_or_get_historical_backfill(
+            &pool,
+            &NewHistoricalBackfill {
+                idempotency_key: format!("api-replay-history-{suffix}"),
+                instrument_id: instrument.id,
+                data_type: "trades".to_owned(),
+                timeframe: None,
+                start_at: start,
+                end_at: end,
+            },
+        )
+        .await
+        .unwrap();
+        ballast_storage::persist_trade_batch(
+            &pool,
+            backfill.id,
+            instrument.id,
+            &[
+                HistoricalTrade {
+                    exchange_trade_id: "first".to_owned(),
+                    trade_time: start + Duration::seconds(1),
+                    price: Decimal::new(100, 0),
+                    quantity: Decimal::new(10, 0),
+                    taker_side: "buy".to_owned(),
+                    source: "okx".to_owned(),
+                    observed_at: Utc::now(),
+                },
+                HistoricalTrade {
+                    exchange_trade_id: "second".to_owned(),
+                    trade_time: start + Duration::seconds(11),
+                    price: Decimal::new(101, 0),
+                    quantity: Decimal::new(10, 0),
+                    taker_side: "buy".to_owned(),
+                    source: "okx".to_owned(),
+                    observed_at: Utc::now(),
+                },
+            ],
+            end,
+            true,
+        )
+        .await
+        .unwrap();
+        let state = crate::AppState {
+            database: pool,
+            gateway: ballast_gateway_client::GatewayClient::connect_lazy("http://127.0.0.1:1"),
+            metrics: crate::metrics::AppMetrics::new().unwrap(),
+        };
+        let request = CreateReplayRequest {
+            exchange: "okx".to_owned(),
+            market_kind: "spot".to_owned(),
+            symbol,
+            template_version_id: template.id,
+            side: "buy".to_owned(),
+            requested_amount: "2".to_owned(),
+            quantity_unit: "base_quantity".to_owned(),
+            start_at: start,
+            end_at: end,
+            idempotency_key: format!("api-replay-{suffix}"),
+            execution_model: "trade_vwap_proxy".to_owned(),
+            fee_rate: Some("0.001".to_owned()),
+            extra_slippage_bps: Some("0".to_owned()),
+            gap_threshold_seconds: Some(20),
+        };
+        let mut conflicting = request.clone();
+        conflicting.fee_rate = Some("0.002".to_owned());
+        let (first, second) = tokio::join!(
+            create_replay(State(state.clone()), Json(request)),
+            create_replay(State(state), Json(conflicting)),
+        );
+        let outcomes = [first, second];
+        let errors = outcomes
+            .iter()
+            .filter_map(|result| {
+                result
+                    .as_ref()
+                    .err()
+                    .map(|error| (error.status, error.code))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "unexpected API errors: {errors:?}"
+        );
+        let conflict = outcomes
+            .into_iter()
+            .find_map(Result::err)
+            .expect("one request must lose the idempotency race");
+        assert_eq!(conflict.status, StatusCode::CONFLICT);
+        assert_eq!(conflict.code, "replay_idempotency_key_conflict");
     }
 }

@@ -46,3 +46,5 @@ live 任务从 `pending_approval` 开始；创建者与批准者必须不同。�
 - `replay_metrics`：VWAP、implementation shortfall、成交率、参与率、费用与显式滑点。
 
 三类回放记录在同一个事务中写入；`idempotency_key` 唯一，重复请求不会生成第二组切片或指标。
+
+迁移 `0008_replay_data_snapshot.sql` 为逐笔成交增加数据库分配的单调 `ingestion_id`，并让回放运行保存 `data_snapshot` 与 `coverage_snapshot`。回放分页在只读 `REPEATABLE READ` 事务中使用已冻结的 PostgreSQL snapshot 与最大 `ingestion_id`，所以补数在分页期间插入更早排序键的成交也不会改变本次数据集；快照同时记录完整覆盖所依赖的补数任务。旧的 `0007` 运行会被明确标记为 `unverifiable_pre_0008`，不会伪装成可复核快照。

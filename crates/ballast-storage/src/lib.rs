@@ -11,9 +11,11 @@ mod task_repository;
 
 pub use historical_repository::{
     HistoricalCandle, HistoricalTrade, NewHistoricalBackfill, StoredHistoricalBackfill,
-    create_or_get_historical_backfill, get_historical_backfill, list_historical_candles,
-    list_historical_trade_page, list_historical_trades, mark_historical_backfill_failed,
-    mark_historical_backfill_running, persist_candle_batch, persist_trade_batch,
+    create_or_get_historical_backfill, get_historical_backfill,
+    historical_trade_snapshot_high_watermark, list_historical_candles,
+    list_historical_trade_backfills, list_historical_trade_page, list_historical_trades,
+    mark_historical_backfill_failed, mark_historical_backfill_running, persist_candle_batch,
+    persist_trade_batch,
 };
 pub use instrument_repository::{
     StoredInstrument, get_instrument, get_instrument_by_key, list_instruments,
@@ -24,8 +26,8 @@ pub use live_repository::{
     list_risk_decisions, list_task_approvals, reject_task,
 };
 pub use replay_repository::{
-    NewReplayMetrics, NewReplayRun, NewReplaySlice, StoredReplayMetrics, StoredReplayRun,
-    StoredReplaySlice, create_replay_result, get_replay_metrics, get_replay_run,
+    CreateReplayError, NewReplayMetrics, NewReplayRun, NewReplaySlice, StoredReplayMetrics,
+    StoredReplayRun, StoredReplaySlice, create_replay_result, get_replay_metrics, get_replay_run,
     get_replay_run_by_key, list_replay_slices,
 };
 pub use strategy_repository::{

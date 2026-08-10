@@ -68,6 +68,17 @@ pub struct GatewayClient {
 }
 
 impl GatewayClient {
+    #[must_use]
+    pub fn connect_lazy(endpoint: &'static str) -> Self {
+        let channel = Channel::from_static(endpoint).connect_lazy();
+        Self {
+            market_data: MarketDataServiceClient::new(channel.clone()),
+            account: AccountServiceClient::new(channel.clone()),
+            trading: TradingServiceClient::new(channel.clone()),
+            algorithmic: AlgorithmicTradingServiceClient::new(channel),
+        }
+    }
+
     pub async fn connect(endpoint: impl Into<String>) -> Result<Self, GatewayClientError> {
         let endpoint = endpoint.into();
         Ok(Self {

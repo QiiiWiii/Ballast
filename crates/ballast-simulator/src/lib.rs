@@ -134,7 +134,7 @@ pub fn replay_trade_vwap_proxy(
     let arrival_price = relevant[0].price;
     let mut slices = Vec::with_capacity(total_ticks as usize);
     let mut executed_amount = Decimal::ZERO;
-    let mut executed_native = Decimal::ZERO;
+    let mut executed_base = Decimal::ZERO;
     let mut execution_quote = Decimal::ZERO;
     let mut total_fees = Decimal::ZERO;
     let mut explicit_slippage_amount = Decimal::ZERO;
@@ -152,7 +152,7 @@ pub fn replay_trade_vwap_proxy(
         let market_native = window
             .iter()
             .fold(Decimal::ZERO, |total, trade| total + trade.native_quantity);
-        let market_vwap = weighted_vwap(window);
+        let market_vwap = weighted_vwap(&config.instrument, window)?;
         let market_volume = window.iter().try_fold(Decimal::ZERO, |total, trade| {
             Ok::<_, DomainError>(
                 total
@@ -180,60 +180,91 @@ pub fn replay_trade_vwap_proxy(
         }
         desired = desired.min(remaining).max(Decimal::ZERO);
 
-        let (status, filled_amount, filled_native, simulated_price, fee_amount) =
-            if window.is_empty() {
-                ("empty", Decimal::ZERO, Decimal::ZERO, None, Decimal::ZERO)
-            } else if desired.is_zero() {
-                ("skipped", Decimal::ZERO, Decimal::ZERO, None, Decimal::ZERO)
-            } else if let Some(market_price) = market_vwap {
-                let simulated_price =
-                    apply_slippage(market_price, config.side, config.extra_slippage_bps);
-                let desired_native = config.instrument.target_to_native_quantity(
-                    desired,
-                    config.quantity_unit,
-                    simulated_price,
-                )?;
-                let filled_native = desired_native.min(market_native);
-                let filled_amount = native_to_unit(
-                    &config.instrument,
-                    config.quantity_unit,
-                    filled_native,
-                    simulated_price,
-                )?
-                .min(remaining);
-                let filled_quote = config
-                    .instrument
-                    .native_to_quote_quantity(filled_native, simulated_price)?;
-                let fee = filled_quote * config.fee_rate;
-                let status = if filled_amount.is_zero() {
-                    "empty"
-                } else if filled_amount < desired {
-                    "partial"
-                } else {
-                    "filled"
-                };
-                explicit_slippage_amount += config
-                    .instrument
-                    .native_to_base_quantity(filled_native, simulated_price)?
-                    * (simulated_price - market_price).abs();
-                (
-                    status,
-                    filled_amount,
-                    filled_native,
-                    Some(simulated_price),
-                    fee,
-                )
+        let (
+            status,
+            filled_amount,
+            filled_native,
+            filled_base,
+            filled_quote,
+            simulated_price,
+            fee_amount,
+        ) = if window.is_empty() {
+            (
+                "empty",
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                None,
+                Decimal::ZERO,
+            )
+        } else if desired.is_zero() {
+            (
+                "skipped",
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                None,
+                Decimal::ZERO,
+            )
+        } else if let Some(market_price) = market_vwap {
+            let simulated_price =
+                apply_slippage(market_price, config.side, config.extra_slippage_bps);
+            let desired_native = config.instrument.target_to_native_quantity(
+                desired,
+                config.quantity_unit,
+                simulated_price,
+            )?;
+            let filled_native = desired_native.min(market_native);
+            let filled_amount = native_to_unit(
+                &config.instrument,
+                config.quantity_unit,
+                filled_native,
+                simulated_price,
+            )?
+            .min(remaining);
+            let filled_quote = config
+                .instrument
+                .native_to_quote_quantity(filled_native, simulated_price)?;
+            let filled_base = config
+                .instrument
+                .native_to_base_quantity(filled_native, simulated_price)?;
+            let fee = filled_quote * config.fee_rate;
+            let status = if filled_amount.is_zero() {
+                "empty"
+            } else if filled_amount < desired {
+                "partial"
             } else {
-                ("empty", Decimal::ZERO, Decimal::ZERO, None, Decimal::ZERO)
+                "filled"
             };
+            explicit_slippage_amount += filled_base * (simulated_price - market_price).abs();
+            (
+                status,
+                filled_amount,
+                filled_native,
+                filled_base,
+                filled_quote,
+                Some(simulated_price),
+                fee,
+            )
+        } else {
+            (
+                "empty",
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                None,
+                Decimal::ZERO,
+            )
+        };
         if window.is_empty() {
             empty_windows += 1;
         }
         executed_amount += filled_amount;
-        executed_native += filled_native;
-        if let Some(price) = simulated_price {
-            execution_quote += filled_native * price;
-        }
+        executed_base += filled_base;
+        execution_quote += filled_quote;
         total_fees += fee_amount;
         slices.push(ReplaySliceResult {
             sequence: i32::try_from(tick + 1).unwrap(),
@@ -258,20 +289,18 @@ pub fn replay_trade_vwap_proxy(
         });
     }
 
-    let market_vwap = weighted_vwap_refs(&relevant);
-    let execution_vwap = (!executed_native.is_zero()).then_some(execution_quote / executed_native);
-    let filled_base = match execution_vwap {
-        Some(price) => config
-            .instrument
-            .native_to_base_quantity(executed_native, price)?,
-        None => Decimal::ZERO,
+    let market_vwap = weighted_vwap(&config.instrument, &relevant)?;
+    let execution_vwap = if executed_base.is_zero() {
+        None
+    } else {
+        Some(execution_quote / executed_base)
     };
-    let price_shortfall = execution_vwap.map(|price| match config.side {
-        Side::Buy => (price - arrival_price) * filled_base,
-        Side::Sell => (arrival_price - price) * filled_base,
+    let arrival_notional = arrival_price * executed_base;
+    let price_shortfall = execution_vwap.map(|_| match config.side {
+        Side::Buy => execution_quote - arrival_notional,
+        Side::Sell => arrival_notional - execution_quote,
     });
     let shortfall_amount = price_shortfall.map(|value| value + total_fees);
-    let arrival_notional = arrival_price * filled_base;
     let shortfall_bps = shortfall_amount
         .filter(|_| !arrival_notional.is_zero())
         .map(|value| value / arrival_notional * BPS_DENOMINATOR);
@@ -411,19 +440,27 @@ fn native_to_unit(
     }
 }
 
-fn weighted_vwap(trades: &[&ReplayTrade]) -> Option<Decimal> {
-    let total = trades
-        .iter()
-        .fold(Decimal::ZERO, |sum, trade| sum + trade.native_quantity);
-    (!total.is_zero()).then(|| {
-        trades.iter().fold(Decimal::ZERO, |sum, trade| {
-            sum + trade.price * trade.native_quantity
-        }) / total
+fn weighted_vwap(
+    instrument: &Instrument,
+    trades: &[&ReplayTrade],
+) -> Result<Option<Decimal>, DomainError> {
+    let (base, quote) =
+        trades
+            .iter()
+            .try_fold((Decimal::ZERO, Decimal::ZERO), |(base, quote), trade| {
+                Ok::<_, DomainError>((
+                    base + instrument
+                        .native_to_base_quantity(trade.native_quantity, trade.price)?,
+                    quote
+                        + instrument
+                            .native_to_quote_quantity(trade.native_quantity, trade.price)?,
+                ))
+            })?;
+    Ok(if base.is_zero() {
+        None
+    } else {
+        Some(quote / base)
     })
-}
-
-fn weighted_vwap_refs(trades: &[&ReplayTrade]) -> Option<Decimal> {
-    weighted_vwap(trades)
 }
 
 fn collect_gaps(config: &ReplayConfig, trades: &[&ReplayTrade]) -> Vec<ReplayGap> {
@@ -632,6 +669,84 @@ mod tests {
         }
     }
 
+    fn perpetual_instrument(kind: ContractKind, contract_size: Decimal) -> Instrument {
+        Instrument {
+            id: InstrumentId::new(
+                Exchange::Binance,
+                MarketKind::Perpetual,
+                match kind {
+                    ContractKind::Linear => "BTC/USDT:USDT",
+                    ContractKind::Inverse => "BTC/USD:BTC",
+                },
+            )
+            .unwrap(),
+            exchange_symbol: "BTC-PERP".to_owned(),
+            base_asset: "BTC".to_owned(),
+            quote_asset: "USD".to_owned(),
+            settle_asset: Some(
+                match kind {
+                    ContractKind::Linear => "USDT",
+                    ContractKind::Inverse => "BTC",
+                }
+                .to_owned(),
+            ),
+            contract_kind: Some(kind),
+            contract_size: Some(contract_size),
+            price_tick: Decimal::new(1, 1),
+            quantity_step: Decimal::new(1, 2),
+            minimum_quantity: None,
+            minimum_notional: None,
+            maker_fee_rate: None,
+            taker_fee_rate: None,
+            active: true,
+        }
+    }
+
+    fn two_trade_replay(
+        instrument: Instrument,
+        quantity_unit: QuantityUnit,
+        requested_amount: Decimal,
+        first_price: Decimal,
+        second_price: Decimal,
+        fee_rate: Decimal,
+    ) -> ReplayResult {
+        let start = DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        replay_trade_vwap_proxy(
+            &ReplayConfig {
+                instrument,
+                strategy_kind: StrategyKind::Twap,
+                side: Side::Buy,
+                requested_amount,
+                quantity_unit,
+                start_at: start,
+                end_at: start + Duration::seconds(20),
+                slice_interval: Duration::seconds(10),
+                participation_rate: None,
+                max_slice_amount: None,
+                fee_rate,
+                extra_slippage_bps: Decimal::ZERO,
+                gap_threshold: Duration::seconds(20),
+            },
+            &[
+                ReplayTrade {
+                    exchange_trade_id: "first".to_owned(),
+                    trade_time: start + Duration::seconds(1),
+                    price: first_price,
+                    native_quantity: Decimal::ONE,
+                },
+                ReplayTrade {
+                    exchange_trade_id: "second".to_owned(),
+                    trade_time: start + Duration::seconds(11),
+                    price: second_price,
+                    native_quantity: Decimal::ONE,
+                },
+            ],
+        )
+        .unwrap()
+    }
+
     #[test]
     fn buy_stops_at_price_protection() {
         let asks = [
@@ -744,6 +859,86 @@ mod tests {
             Some(Decimal::new(2, 1))
         );
         assert_eq!(result.metrics.residual_amount, Decimal::new(8, 0));
+    }
+
+    #[test]
+    fn spot_quote_notional_replay_uses_quote_volume() {
+        let result = two_trade_replay(
+            spot_instrument(),
+            QuantityUnit::QuoteNotional,
+            Decimal::new(300, 0),
+            Decimal::new(100, 0),
+            Decimal::new(200, 0),
+            Decimal::ZERO,
+        );
+
+        assert_eq!(result.metrics.filled_amount, Decimal::new(300, 0));
+        assert_eq!(
+            result.metrics.simulated_execution_vwap,
+            Some(Decimal::new(150, 0))
+        );
+    }
+
+    #[test]
+    fn linear_contract_replay_supports_base_and_contract_units() {
+        let instrument = perpetual_instrument(ContractKind::Linear, Decimal::new(1, 3));
+        let base = two_trade_replay(
+            instrument.clone(),
+            QuantityUnit::BaseQuantity,
+            Decimal::new(2, 3),
+            Decimal::new(20_000, 0),
+            Decimal::new(20_000, 0),
+            Decimal::ZERO,
+        );
+        let contracts = two_trade_replay(
+            instrument,
+            QuantityUnit::Contracts,
+            Decimal::new(2, 0),
+            Decimal::new(20_000, 0),
+            Decimal::new(20_000, 0),
+            Decimal::ZERO,
+        );
+
+        assert_eq!(base.metrics.filled_amount, Decimal::new(2, 3));
+        assert_eq!(contracts.metrics.filled_amount, Decimal::new(2, 0));
+        assert_eq!(
+            base.metrics.simulated_execution_vwap,
+            Some(Decimal::new(20_000, 0))
+        );
+    }
+
+    #[test]
+    fn inverse_replay_aggregates_base_and_quote_per_slice() {
+        let result = two_trade_replay(
+            perpetual_instrument(ContractKind::Inverse, Decimal::new(100, 0)),
+            QuantityUnit::Contracts,
+            Decimal::new(2, 0),
+            Decimal::new(100, 0),
+            Decimal::new(200, 0),
+            Decimal::new(1, 2),
+        );
+
+        assert_eq!(result.metrics.filled_amount, Decimal::new(2, 0));
+        assert_eq!(
+            result.metrics.simulated_execution_vwap,
+            Some(Decimal::new(200, 0) / Decimal::new(15, 1))
+        );
+        assert_eq!(result.metrics.fee_amount, Decimal::new(2, 0));
+        assert_eq!(
+            result.metrics.implementation_shortfall_amount,
+            Some(Decimal::new(52, 0))
+        );
+        assert_eq!(result.metrics.actual_participation_rate, Some(Decimal::ONE));
+
+        let quote = two_trade_replay(
+            perpetual_instrument(ContractKind::Inverse, Decimal::new(100, 0)),
+            QuantityUnit::QuoteNotional,
+            Decimal::new(200, 0),
+            Decimal::new(100, 0),
+            Decimal::new(200, 0),
+            Decimal::ZERO,
+        );
+        assert_eq!(quote.metrics.filled_amount, Decimal::new(200, 0));
     }
 
     #[test]

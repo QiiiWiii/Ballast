@@ -3,6 +3,8 @@
 import type * as grpc from '@grpc/grpc-js'
 import type { MethodDefinition } from '@grpc/proto-loader'
 import type { ExchangeCapabilities as _ballast_gateway_v1_ExchangeCapabilities, ExchangeCapabilities__Output as _ballast_gateway_v1_ExchangeCapabilities__Output } from '../../../ballast/gateway/v1/ExchangeCapabilities';
+import type { FetchHistoricalBatchRequest as _ballast_gateway_v1_FetchHistoricalBatchRequest, FetchHistoricalBatchRequest__Output as _ballast_gateway_v1_FetchHistoricalBatchRequest__Output } from '../../../ballast/gateway/v1/FetchHistoricalBatchRequest';
+import type { FetchHistoricalBatchResponse as _ballast_gateway_v1_FetchHistoricalBatchResponse, FetchHistoricalBatchResponse__Output as _ballast_gateway_v1_FetchHistoricalBatchResponse__Output } from '../../../ballast/gateway/v1/FetchHistoricalBatchResponse';
 import type { GetCapabilitiesRequest as _ballast_gateway_v1_GetCapabilitiesRequest, GetCapabilitiesRequest__Output as _ballast_gateway_v1_GetCapabilitiesRequest__Output } from '../../../ballast/gateway/v1/GetCapabilitiesRequest';
 import type { GetOrderBookRequest as _ballast_gateway_v1_GetOrderBookRequest, GetOrderBookRequest__Output as _ballast_gateway_v1_GetOrderBookRequest__Output } from '../../../ballast/gateway/v1/GetOrderBookRequest';
 import type { HealthRequest as _ballast_gateway_v1_HealthRequest, HealthRequest__Output as _ballast_gateway_v1_HealthRequest__Output } from '../../../ballast/gateway/v1/HealthRequest';
@@ -15,6 +17,15 @@ import type { TradeStreamEvent as _ballast_gateway_v1_TradeStreamEvent, TradeStr
 import type { WatchMarketRequest as _ballast_gateway_v1_WatchMarketRequest, WatchMarketRequest__Output as _ballast_gateway_v1_WatchMarketRequest__Output } from '../../../ballast/gateway/v1/WatchMarketRequest';
 
 export interface MarketDataServiceClient extends grpc.Client {
+  FetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, metadata: grpc.Metadata, options: grpc.CallOptions, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  FetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, metadata: grpc.Metadata, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  FetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, options: grpc.CallOptions, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  FetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  fetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, metadata: grpc.Metadata, options: grpc.CallOptions, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  fetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, metadata: grpc.Metadata, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  fetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, options: grpc.CallOptions, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  fetchHistoricalBatch(argument: _ballast_gateway_v1_FetchHistoricalBatchRequest, callback: grpc.requestCallback<_ballast_gateway_v1_FetchHistoricalBatchResponse__Output>): grpc.ClientUnaryCall;
+  
   GetCapabilities(argument: _ballast_gateway_v1_GetCapabilitiesRequest, metadata: grpc.Metadata, options: grpc.CallOptions, callback: grpc.requestCallback<_ballast_gateway_v1_ExchangeCapabilities__Output>): grpc.ClientUnaryCall;
   GetCapabilities(argument: _ballast_gateway_v1_GetCapabilitiesRequest, metadata: grpc.Metadata, callback: grpc.requestCallback<_ballast_gateway_v1_ExchangeCapabilities__Output>): grpc.ClientUnaryCall;
   GetCapabilities(argument: _ballast_gateway_v1_GetCapabilitiesRequest, options: grpc.CallOptions, callback: grpc.requestCallback<_ballast_gateway_v1_ExchangeCapabilities__Output>): grpc.ClientUnaryCall;
@@ -64,6 +75,8 @@ export interface MarketDataServiceClient extends grpc.Client {
 }
 
 export interface MarketDataServiceHandlers extends grpc.UntypedServiceImplementation {
+  FetchHistoricalBatch: grpc.handleUnaryCall<_ballast_gateway_v1_FetchHistoricalBatchRequest__Output, _ballast_gateway_v1_FetchHistoricalBatchResponse>;
+  
   GetCapabilities: grpc.handleUnaryCall<_ballast_gateway_v1_GetCapabilitiesRequest__Output, _ballast_gateway_v1_ExchangeCapabilities>;
   
   GetOrderBook: grpc.handleUnaryCall<_ballast_gateway_v1_GetOrderBookRequest__Output, _ballast_gateway_v1_OrderBook>;
@@ -79,6 +92,7 @@ export interface MarketDataServiceHandlers extends grpc.UntypedServiceImplementa
 }
 
 export interface MarketDataServiceDefinition extends grpc.ServiceDefinition {
+  FetchHistoricalBatch: MethodDefinition<_ballast_gateway_v1_FetchHistoricalBatchRequest, _ballast_gateway_v1_FetchHistoricalBatchResponse, _ballast_gateway_v1_FetchHistoricalBatchRequest__Output, _ballast_gateway_v1_FetchHistoricalBatchResponse__Output>
   GetCapabilities: MethodDefinition<_ballast_gateway_v1_GetCapabilitiesRequest, _ballast_gateway_v1_ExchangeCapabilities, _ballast_gateway_v1_GetCapabilitiesRequest__Output, _ballast_gateway_v1_ExchangeCapabilities__Output>
   GetOrderBook: MethodDefinition<_ballast_gateway_v1_GetOrderBookRequest, _ballast_gateway_v1_OrderBook, _ballast_gateway_v1_GetOrderBookRequest__Output, _ballast_gateway_v1_OrderBook__Output>
   Health: MethodDefinition<_ballast_gateway_v1_HealthRequest, _ballast_gateway_v1_HealthResponse, _ballast_gateway_v1_HealthRequest__Output, _ballast_gateway_v1_HealthResponse__Output>

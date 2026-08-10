@@ -2,6 +2,15 @@
 
 所有业务接口位于 `/api/v1`，价格、数量和金额字段使用十进制字符串。
 
+## 历史行情
+
+- `POST /api/v1/history/backfills`：创建或继续幂等补数任务
+- `GET /api/v1/history/backfills/{job_id}`：读取游标、覆盖范围与失败原因
+- `GET /api/v1/history/ohlcv`
+- `GET /api/v1/history/trades`
+
+补数参数包含 `exchange`、`market_kind`、`symbol`、`data_type`、`start_at`、`end_at` 和 `idempotency_key`。OHLCV 还必须提供 `timeframe`。`page_limit` 范围为 1–1000，`max_pages` 范围为 1–100；达到单次页数上限但尚未结束时任务返回 `pending`，用相同请求继续。完整示例与数据边界见 `docs/historical-data.md`。
+
 ## 标的与交易所
 
 - `GET /api/v1/exchanges`

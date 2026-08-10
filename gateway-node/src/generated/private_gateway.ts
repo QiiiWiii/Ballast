@@ -37,6 +37,8 @@ export interface ProtoGrpcType {
         ContractKind: EnumTypeDefinition
         Exchange: EnumTypeDefinition
         ExchangeCapabilities: MessageTypeDefinition
+        FetchHistoricalBatchRequest: MessageTypeDefinition
+        FetchHistoricalBatchResponse: MessageTypeDefinition
         Fill: MessageTypeDefinition
         GetAccountSnapshotRequest: MessageTypeDefinition
         GetAlgoCapabilitiesRequest: MessageTypeDefinition
@@ -47,6 +49,9 @@ export interface ProtoGrpcType {
         GetTradingCapabilitiesRequest: MessageTypeDefinition
         HealthRequest: MessageTypeDefinition
         HealthResponse: MessageTypeDefinition
+        HistoricalCandle: MessageTypeDefinition
+        HistoricalDataType: EnumTypeDefinition
+        HistoricalTrade: MessageTypeDefinition
         Instrument: MessageTypeDefinition
         InstrumentKey: MessageTypeDefinition
         ListAlgoSubOrdersRequest: MessageTypeDefinition

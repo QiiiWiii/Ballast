@@ -12,6 +12,10 @@ import type {
   ContractKind,
   ExchangeCapabilities,
   ExchangeId,
+  HistoricalBatch,
+  HistoricalCandle,
+  HistoricalDataType,
+  HistoricalTrade,
   Instrument,
   InstrumentKey,
   MarketDataAdapter,
@@ -68,6 +72,8 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
       fetchOrderBook: this.#rest.has.fetchOrderBook === true,
       watchOrderBook: this.#stream.has.watchOrderBook === true,
       watchTrades: this.#stream.has.watchTrades === true,
+      fetchOhlcv: this.#rest.has.fetchOHLCV === true,
+      fetchTrades: this.#rest.has.fetchTrades === true,
     };
   }
 
@@ -75,6 +81,55 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
     await this.#rest.loadMarkets();
     const book = await this.#rest.fetchOrderBook(instrument.symbol, depth);
     return normalizeOrderBook(instrument, book, depth);
+  }
+
+  async fetchHistoricalBatch(
+    instrument: InstrumentKey,
+    dataType: HistoricalDataType,
+    timeframe: string | undefined,
+    cursorMs: number,
+    endMs: number,
+    limit: number,
+  ): Promise<HistoricalBatch> {
+    await this.#rest.loadMarkets();
+    if (dataType === "ohlcv") {
+      if (this.#rest.has.fetchOHLCV !== true) throw new Error("fetch_ohlcv_not_supported");
+      if (!timeframe) throw new Error("timeframe_required");
+      const rows = await withReadRetry(() =>
+        this.#rest.fetchOHLCV(instrument.symbol, timeframe, cursorMs, limit),
+      );
+      const candles = rows
+        .map(normalizeHistoricalCandle)
+        .filter((row) => row.openTimeMs >= cursorMs && row.openTimeMs < endMs)
+        .sort((left, right) => left.openTimeMs - right.openTimeMs);
+      const stepMs = this.#rest.parseTimeframe(timeframe) * 1_000;
+      const nextCursorMs = nextHistoricalCursor(
+        candles.map((row) => row.openTimeMs), cursorMs, endMs, stepMs,
+      );
+      return {
+        candles,
+        trades: [],
+        nextCursorMs,
+        exhausted: rows.length < limit || nextCursorMs >= endMs,
+      };
+    }
+    if (this.#rest.has.fetchTrades !== true) throw new Error("fetch_trades_not_supported");
+    const rows = await withReadRetry(() =>
+      this.#rest.fetchTrades(instrument.symbol, cursorMs, limit),
+    );
+    const trades = rows
+      .map(normalizeHistoricalTrade)
+      .filter((row) => row.tradeTimeMs >= cursorMs && row.tradeTimeMs < endMs)
+      .sort((left, right) => left.tradeTimeMs - right.tradeTimeMs || left.exchangeTradeId.localeCompare(right.exchangeTradeId));
+    const nextCursorMs = nextHistoricalCursor(
+      trades.map((row) => row.tradeTimeMs), cursorMs, endMs, 1,
+    );
+    return {
+      candles: [],
+      trades,
+      nextCursorMs,
+      exhausted: rows.length < limit || nextCursorMs >= endMs,
+    };
   }
 
   async watchOrderBook(instrument: InstrumentKey, depth: number): Promise<OrderBook> {
@@ -93,6 +148,58 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
     await Promise.allSettled([this.#rest.close(), this.#stream.close()]);
   }
 
+}
+
+export function normalizeHistoricalCandle(
+  row: readonly (number | undefined)[],
+): HistoricalCandle {
+  if (row.length < 6) throw new Error("historical candle is incomplete");
+  const openTimeMs = row[0];
+  if (openTimeMs === undefined || !Number.isFinite(openTimeMs)) {
+    throw new Error("candle.timestamp is unavailable");
+  }
+  return {
+    openTimeMs,
+    open: requiredDecimal(row[1], "candle.open"),
+    high: requiredDecimal(row[2], "candle.high"),
+    low: requiredDecimal(row[3], "candle.low"),
+    close: requiredDecimal(row[4], "candle.close"),
+    volume: nonNegativeDecimal(row[5], "candle.volume"),
+  };
+}
+
+export function normalizeHistoricalTrade(trade: CcxtTrade): HistoricalTrade {
+  return {
+    exchangeTradeId: requiredText(trade.id, "trade.id"),
+    tradeTimeMs: requiredTimestamp(trade.timestamp, "trade.timestamp"),
+    price: requiredDecimal(trade.price, "trade.price"),
+    quantity: requiredDecimal(trade.amount, "trade.amount"),
+    takerSide: normalizeSide(trade.side),
+  };
+}
+
+export function nextHistoricalCursor(
+  timestamps: readonly number[],
+  cursorMs: number,
+  endMs: number,
+  stepMs: number,
+): number {
+  if (timestamps.length === 0) return endMs;
+  const next = timestamps[timestamps.length - 1]! + stepMs;
+  return Math.min(endMs, Math.max(cursorMs, next));
+}
+
+export async function withReadRetry<T>(read: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await read();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+    }
+  }
+  throw lastError;
 }
 
 export function normalizeInstrument(
@@ -206,6 +313,17 @@ function requiredDecimal(value: unknown, field: string): string {
   const normalized = optionalDecimal(value);
   if (normalized === undefined) throw new Error(`${field} is unavailable`);
   return normalized;
+}
+
+function nonNegativeDecimal(value: unknown, field: string): string {
+  const normalized = requiredDecimal(value, field);
+  if (new Decimal(normalized).lt(0)) throw new Error(`${field} is negative`);
+  return normalized;
+}
+
+function requiredTimestamp(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${field} is unavailable`);
+  return value;
 }
 
 function optionalDecimal(value: unknown): string | undefined {

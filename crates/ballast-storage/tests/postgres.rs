@@ -2,7 +2,8 @@ use ballast_core::{
     Exchange, Instrument, InstrumentId, MarketKind, QuantityUnit, Side, StrategyKind,
 };
 use ballast_storage::{
-    NewExecutionTask, NewStrategyTemplate, NewStrategyTemplateVersion, SliceRecord,
+    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewStrategyTemplate,
+    NewStrategyTemplateVersion, SliceRecord,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -294,4 +295,101 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn historical_backfill_is_resumable_and_deduplicated() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+        return;
+    };
+    let pool = ballast_storage::connect(&database_url).await.unwrap();
+    ballast_storage::migrate(&pool).await.unwrap();
+    let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    let symbol = format!("HISTORY/USDT-{suffix}");
+    let instrument = Instrument {
+        id: InstrumentId::new(Exchange::Okx, MarketKind::Spot, &symbol).unwrap(),
+        exchange_symbol: format!("HISTORYUSDT{suffix}"),
+        base_asset: "HISTORY".to_owned(),
+        quote_asset: "USDT".to_owned(),
+        settle_asset: None,
+        contract_kind: None,
+        contract_size: None,
+        price_tick: Decimal::new(1, 2),
+        quantity_step: Decimal::new(1, 3),
+        minimum_quantity: None,
+        minimum_notional: None,
+        maker_fee_rate: None,
+        taker_fee_rate: None,
+        active: true,
+    };
+    let stored = ballast_storage::upsert_instruments(&pool, &[instrument])
+        .await
+        .unwrap();
+    let start = Utc::now() - Duration::hours(1);
+    let end = start + Duration::minutes(5);
+    let job = ballast_storage::create_or_get_historical_backfill(
+        &pool,
+        &NewHistoricalBackfill {
+            idempotency_key: format!("history-test-{suffix}"),
+            instrument_id: stored[0].id,
+            data_type: "ohlcv".to_owned(),
+            timeframe: Some("1m".to_owned()),
+            start_at: start,
+            end_at: end,
+        },
+    )
+    .await
+    .unwrap();
+    ballast_storage::mark_historical_backfill_running(&pool, job.id)
+        .await
+        .unwrap();
+    let candle = HistoricalCandle {
+        open_time: start,
+        open: Decimal::new(100, 0),
+        high: Decimal::new(110, 0),
+        low: Decimal::new(90, 0),
+        close: Decimal::new(105, 0),
+        volume: Decimal::new(10, 0),
+        source: "okx".to_owned(),
+        observed_at: Utc::now(),
+    };
+    ballast_storage::persist_candle_batch(
+        &pool,
+        job.id,
+        stored[0].id,
+        "1m",
+        std::slice::from_ref(&candle),
+        start + Duration::minutes(1),
+        false,
+    )
+    .await
+    .unwrap();
+    ballast_storage::persist_candle_batch(
+        &pool,
+        job.id,
+        stored[0].id,
+        "1m",
+        std::slice::from_ref(&candle),
+        end,
+        true,
+    )
+    .await
+    .unwrap();
+    let (candles, total) =
+        ballast_storage::list_historical_candles(&pool, stored[0].id, "1m", start, end, 100, 0)
+            .await
+            .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(candles.len(), 1);
+    let completed = ballast_storage::get_historical_backfill(&pool, job.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed.status, "completed");
+    assert_eq!(completed.rows_written, 1);
+    assert_eq!(
+        completed.cursor_at.timestamp_micros(),
+        end.timestamp_micros()
+    );
 }

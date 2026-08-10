@@ -38,3 +38,11 @@ live 任务从 `pending_approval` 开始；创建者与批准者必须不同。�
 - `historical_trades`：按标的和交易所原始成交 ID 幂等保存逐笔成交。
 
 任务页数据与游标在同一个事务内提交。重复执行不会增加行情表记录；中断后从已提交的 `cursor_at` 继续。
+
+迁移 `0007_trade_replay.sql` 增加：
+
+- `replay_runs`：不可变输入、策略快照、模型版本、数据覆盖、缺口与可信度。
+- `replay_slices`：逐窗口策略决策、真实成交量、市场 VWAP 和代理执行结果。
+- `replay_metrics`：VWAP、implementation shortfall、成交率、参与率、费用与显式滑点。
+
+三类回放记录在同一个事务中写入；`idempotency_key` 唯一，重复请求不会生成第二组切片或指标。

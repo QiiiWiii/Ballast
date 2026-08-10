@@ -7,4 +7,8 @@ publish.workspace = true
 
 [dependencies]
 ballast-core = { path = "../ballast-core" }
+ballast-strategies = { path = "../ballast-strategies" }
+chrono.workspace = true
 rust_decimal.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

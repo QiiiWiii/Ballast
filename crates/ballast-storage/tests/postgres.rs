@@ -2,8 +2,8 @@ use ballast_core::{
     Exchange, Instrument, InstrumentId, MarketKind, QuantityUnit, Side, StrategyKind,
 };
 use ballast_storage::{
-    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewStrategyTemplate,
-    NewStrategyTemplateVersion, SliceRecord,
+    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewReplayMetrics, NewReplayRun,
+    NewReplaySlice, NewStrategyTemplate, NewStrategyTemplateVersion, SliceRecord,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -295,6 +295,146 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn replay_results_are_atomic_and_idempotent() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+        return;
+    };
+    let pool = ballast_storage::connect(&database_url).await.unwrap();
+    ballast_storage::migrate(&pool).await.unwrap();
+    let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    let instrument = Instrument {
+        id: InstrumentId::new(
+            Exchange::Okx,
+            MarketKind::Spot,
+            format!("BTC/USDT-REPLAY-{suffix}"),
+        )
+        .unwrap(),
+        exchange_symbol: format!("BTCUSDTREPLAY{suffix}"),
+        base_asset: "BTC".to_owned(),
+        quote_asset: "USDT".to_owned(),
+        settle_asset: None,
+        contract_kind: None,
+        contract_size: None,
+        price_tick: Decimal::new(1, 1),
+        quantity_step: Decimal::new(1, 3),
+        minimum_quantity: None,
+        minimum_notional: None,
+        maker_fee_rate: None,
+        taker_fee_rate: Some(Decimal::new(1, 3)),
+        active: true,
+    };
+    let instrument = ballast_storage::upsert_instruments(&pool, &[instrument])
+        .await
+        .unwrap()
+        .remove(0);
+    let (_, template) = ballast_storage::create_strategy_template(
+        &pool,
+        NewStrategyTemplate {
+            name: format!("Replay TWAP {suffix}"),
+            description: "replay integration".to_owned(),
+            strategy_kind: "twap".to_owned(),
+            quantity_unit: "base_quantity".to_owned(),
+            duration_seconds: 60,
+            slice_interval_ms: 30_000,
+            max_slippage_bps: 20,
+            participation_rate: None,
+            max_slice_amount: None,
+            change_note: "initial".to_owned(),
+            execution_backend: "managed_ioc".to_owned(),
+            venue_exchange: None,
+            venue_market_kind: None,
+            native_algorithm: None,
+            native_params: None,
+        },
+    )
+    .await
+    .unwrap();
+    let start = Utc::now();
+    let key = format!("replay-{suffix}");
+    let run = NewReplayRun {
+        idempotency_key: key.clone(),
+        instrument_id: instrument.id,
+        template_version_id: template.id,
+        strategy_kind: "twap".to_owned(),
+        side: "buy".to_owned(),
+        requested_amount: Decimal::ONE,
+        quantity_unit: "base_quantity".to_owned(),
+        start_at: start,
+        end_at: start + Duration::minutes(1),
+        execution_model: "trade_vwap_proxy".to_owned(),
+        model_version: "trade_vwap_proxy/v1".to_owned(),
+        fee_rate: Decimal::new(1, 3),
+        extra_slippage_bps: Decimal::new(5, 0),
+        gap_threshold_seconds: 60,
+        strategy_snapshot: serde_json::json!({ "version": 1 }),
+        request_fingerprint: "stable-fingerprint".to_owned(),
+        status: "completed".to_owned(),
+        failure_code: None,
+        data_first_at: Some(start),
+        data_last_at: Some(start + Duration::seconds(59)),
+        trade_count: 2,
+        gap_count: 0,
+        data_gaps: serde_json::json!([]),
+        confidence: "high".to_owned(),
+        limitations: serde_json::json!(["proxy"]),
+    };
+    let slices = [NewReplaySlice {
+        sequence: 1,
+        window_start: start,
+        window_end: start + Duration::seconds(30),
+        status: "filled".to_owned(),
+        trade_count: 1,
+        market_volume: Decimal::new(10, 0),
+        requested_amount: Decimal::ONE,
+        filled_amount: Decimal::ONE,
+        filled_native_quantity: Decimal::ONE,
+        market_vwap: Some(Decimal::new(100, 0)),
+        simulated_price: Some(Decimal::new(10005, 2)),
+        fee_amount: Decimal::new(10005, 5),
+        decision_input: serde_json::json!({ "tick": 0 }),
+    }];
+    let metrics = NewReplayMetrics {
+        arrival_price: Some(Decimal::new(100, 0)),
+        market_vwap: Some(Decimal::new(100, 0)),
+        simulated_execution_vwap: Some(Decimal::new(10005, 2)),
+        implementation_shortfall_bps: Some(Decimal::new(15, 0)),
+        implementation_shortfall_amount: Some(Decimal::new(15, 2)),
+        requested_amount: Decimal::ONE,
+        filled_amount: Decimal::ONE,
+        fill_rate: Decimal::ONE,
+        residual_amount: Decimal::ZERO,
+        actual_participation_rate: Some(Decimal::new(1, 1)),
+        target_participation_rate: None,
+        participation_rate_deviation: None,
+        slice_count: 1,
+        empty_window_count: 0,
+        fee_amount: Decimal::new(10005, 5),
+        explicit_slippage_amount: Decimal::new(5, 2),
+    };
+
+    let first = ballast_storage::create_replay_result(&pool, &run, &slices, &metrics)
+        .await
+        .unwrap();
+    let duplicate = ballast_storage::create_replay_result(&pool, &run, &slices, &metrics)
+        .await
+        .unwrap();
+    assert_eq!(first.id, duplicate.id);
+    assert_eq!(
+        ballast_storage::list_replay_slices(&pool, first.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let stored_metrics = ballast_storage::get_replay_metrics(&pool, first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_metrics.fill_rate, Decimal::ONE);
 }
 
 #[tokio::test]

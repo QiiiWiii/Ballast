@@ -331,6 +331,42 @@ pub async fn list_historical_trades(
     ))
 }
 
+pub async fn list_historical_trade_page(
+    pool: &DatabasePool,
+    instrument_id: Uuid,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    after: Option<(DateTime<Utc>, String)>,
+    limit: i64,
+) -> Result<Vec<HistoricalTrade>, sqlx::Error> {
+    let after_time = after.as_ref().map(|value| value.0);
+    let after_id = after.as_ref().map(|value| value.1.as_str());
+    sqlx::query(
+        r#"
+        SELECT *
+        FROM historical_trades
+        WHERE instrument_id = $1 AND trade_time >= $2 AND trade_time < $3
+          AND (
+              $4::timestamptz IS NULL
+              OR (trade_time, exchange_trade_id) > ($4, $5)
+          )
+        ORDER BY trade_time, exchange_trade_id
+        LIMIT $6
+        "#,
+    )
+    .bind(instrument_id)
+    .bind(start_at)
+    .bind(end_at)
+    .bind(after_time)
+    .bind(after_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(row_to_trade)
+    .collect()
+}
+
 fn row_to_backfill(row: &sqlx::postgres::PgRow) -> Result<StoredHistoricalBackfill, sqlx::Error> {
     Ok(StoredHistoricalBackfill {
         id: row.try_get("id")?,

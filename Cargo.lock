@@ -273,7 +273,11 @@ name = "ballast-simulator"
 version = "0.1.0"
 dependencies = [
  "ballast-core",
+ "ballast-strategies",
+ "chrono",
  "rust_decimal",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

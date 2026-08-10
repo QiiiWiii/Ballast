@@ -5,14 +5,15 @@ use sqlx::postgres::PgPoolOptions;
 mod historical_repository;
 mod instrument_repository;
 mod live_repository;
+mod replay_repository;
 mod strategy_repository;
 mod task_repository;
 
 pub use historical_repository::{
     HistoricalCandle, HistoricalTrade, NewHistoricalBackfill, StoredHistoricalBackfill,
     create_or_get_historical_backfill, get_historical_backfill, list_historical_candles,
-    list_historical_trades, mark_historical_backfill_failed, mark_historical_backfill_running,
-    persist_candle_batch, persist_trade_batch,
+    list_historical_trade_page, list_historical_trades, mark_historical_backfill_failed,
+    mark_historical_backfill_running, persist_candle_batch, persist_trade_batch,
 };
 pub use instrument_repository::{
     StoredInstrument, get_instrument, get_instrument_by_key, list_instruments,
@@ -21,6 +22,11 @@ pub use instrument_repository::{
 pub use live_repository::{
     StoredAccount, StoredRiskDecision, StoredTaskApproval, approve_task, list_accounts,
     list_risk_decisions, list_task_approvals, reject_task,
+};
+pub use replay_repository::{
+    NewReplayMetrics, NewReplayRun, NewReplaySlice, StoredReplayMetrics, StoredReplayRun,
+    StoredReplaySlice, create_replay_result, get_replay_metrics, get_replay_run,
+    get_replay_run_by_key, list_replay_slices,
 };
 pub use strategy_repository::{
     NewStrategyTemplate, NewStrategyTemplateVersion, StoredStrategyTemplate,

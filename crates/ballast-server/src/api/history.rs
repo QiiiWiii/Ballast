@@ -513,7 +513,7 @@ fn validate_historical_cursor(
     Ok(())
 }
 
-fn parse_market_kind(value: &str) -> ApiResult<MarketKind> {
+pub(super) fn parse_market_kind(value: &str) -> ApiResult<MarketKind> {
     match value {
         "spot" => Ok(MarketKind::Spot),
         "perpetual" => Ok(MarketKind::Perpetual),

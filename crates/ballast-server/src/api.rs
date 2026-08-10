@@ -31,10 +31,12 @@ use uuid::Uuid;
 use crate::AppState;
 
 mod history;
+mod replay;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(history::routes())
+        .merge(replay::routes())
         .route("/api/v1/exchanges", get(list_exchanges))
         .route("/api/v1/exchanges/snapshots", get(exchange_snapshots))
         .route("/api/v1/exchanges/{exchange}", get(get_exchange))

@@ -138,29 +138,49 @@ async fn get_historical_backfill_by_key(
 pub async fn mark_historical_backfill_running(
     pool: &DatabasePool,
     id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE historical_backfill_jobs SET status = 'running', last_error_code = NULL, updated_at = now() WHERE id = $1",
+) -> Result<StoredHistoricalBackfill, sqlx::Error> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE historical_backfill_jobs
+        SET status = 'running', last_error_code = NULL, updated_at = now()
+        WHERE id = $1 AND status <> 'completed'
+        RETURNING *
+        "#,
     )
     .bind(id)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(())
+    match updated {
+        Some(row) => row_to_backfill(&row),
+        None => get_historical_backfill(pool, id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound),
+    }
 }
 
 pub async fn mark_historical_backfill_failed(
     pool: &DatabasePool,
     id: Uuid,
     error_code: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE historical_backfill_jobs SET status = 'failed', last_error_code = $2, updated_at = now() WHERE id = $1",
+) -> Result<StoredHistoricalBackfill, sqlx::Error> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE historical_backfill_jobs
+        SET status = 'failed', last_error_code = $2, updated_at = now()
+        WHERE id = $1 AND status <> 'completed'
+        RETURNING *
+        "#,
     )
     .bind(id)
     .bind(error_code)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(())
+    match updated {
+        Some(row) => row_to_backfill(&row),
+        None => get_historical_backfill(pool, id)
+            .await?
+            .ok_or(sqlx::Error::RowNotFound),
+    }
 }
 
 pub async fn persist_candle_batch(
@@ -171,8 +191,13 @@ pub async fn persist_candle_batch(
     candles: &[HistoricalCandle],
     next_cursor: DateTime<Utc>,
     completed: bool,
-) -> Result<(), sqlx::Error> {
+) -> Result<StoredHistoricalBackfill, sqlx::Error> {
     let mut transaction = pool.begin().await?;
+    let job = lock_historical_backfill(&mut transaction, job_id).await?;
+    if job.status == "completed" || (!completed && next_cursor <= job.cursor_at) {
+        transaction.commit().await?;
+        return Ok(job);
+    }
     let mut inserted = 0_i64;
     for candle in candles {
         let result = sqlx::query(
@@ -198,7 +223,7 @@ pub async fn persist_candle_batch(
         .await?;
         inserted += result.rows_affected() as i64;
     }
-    update_progress(
+    let job = update_progress(
         &mut transaction,
         job_id,
         inserted,
@@ -208,7 +233,8 @@ pub async fn persist_candle_batch(
         completed,
     )
     .await?;
-    transaction.commit().await
+    transaction.commit().await?;
+    Ok(job)
 }
 
 pub async fn persist_trade_batch(
@@ -218,8 +244,13 @@ pub async fn persist_trade_batch(
     trades: &[HistoricalTrade],
     next_cursor: DateTime<Utc>,
     completed: bool,
-) -> Result<(), sqlx::Error> {
+) -> Result<StoredHistoricalBackfill, sqlx::Error> {
     let mut transaction = pool.begin().await?;
+    let job = lock_historical_backfill(&mut transaction, job_id).await?;
+    if job.status == "completed" || (!completed && next_cursor <= job.cursor_at) {
+        transaction.commit().await?;
+        return Ok(job);
+    }
     let mut inserted = 0_i64;
     for trade in trades {
         let result = sqlx::query(
@@ -243,7 +274,7 @@ pub async fn persist_trade_batch(
         .await?;
         inserted += result.rows_affected() as i64;
     }
-    update_progress(
+    let job = update_progress(
         &mut transaction,
         job_id,
         inserted,
@@ -253,7 +284,20 @@ pub async fn persist_trade_batch(
         completed,
     )
     .await?;
-    transaction.commit().await
+    transaction.commit().await?;
+    Ok(job)
+}
+
+async fn lock_historical_backfill(
+    transaction: &mut Transaction<'_, Postgres>,
+    job_id: Uuid,
+) -> Result<StoredHistoricalBackfill, sqlx::Error> {
+    let row = sqlx::query("SELECT * FROM historical_backfill_jobs WHERE id = $1 FOR UPDATE")
+        .bind(job_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)?;
+    row_to_backfill(&row)
 }
 
 async fn update_progress(
@@ -264,8 +308,8 @@ async fn update_progress(
     batch_to: Option<DateTime<Utc>>,
     next_cursor: DateTime<Utc>,
     completed: bool,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<StoredHistoricalBackfill, sqlx::Error> {
+    let row = sqlx::query(
         r#"
         UPDATE historical_backfill_jobs SET
             cursor_at = CASE WHEN $6 THEN end_at ELSE GREATEST(cursor_at, $2) END,
@@ -276,6 +320,7 @@ async fn update_progress(
             last_error_code = NULL,
             updated_at = now()
         WHERE id = $1
+        RETURNING *
         "#,
     )
     .bind(job_id)
@@ -284,9 +329,9 @@ async fn update_progress(
     .bind(batch_to)
     .bind(rows)
     .bind(completed)
-    .execute(&mut **transaction)
+    .fetch_one(&mut **transaction)
     .await?;
-    Ok(())
+    row_to_backfill(&row)
 }
 
 pub async fn list_historical_candles(

@@ -27,7 +27,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/api/v1/history/trades", get(list_trades))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct BackfillRequest {
     exchange: String,
     market_kind: String,
@@ -109,19 +109,19 @@ async fn run_backfill(
     {
         return Err(ApiError::conflict("idempotency_key_conflict"));
     }
-    if created.status == "completed" {
-        return Ok(Json(created.into()));
-    }
-    ballast_storage::mark_historical_backfill_running(&state.database, created.id)
+    let mut job = ballast_storage::mark_historical_backfill_running(&state.database, created.id)
         .await
         .map_err(ApiError::database)?;
+    if job.status == "completed" {
+        return Ok(Json(job.into()));
+    }
 
     let data_type = if request.data_type == "ohlcv" {
         HistoricalDataType::Ohlcv
     } else {
         HistoricalDataType::Trades
     };
-    let mut cursor = created.cursor_at;
+    let mut cursor = job.cursor_at;
     for _ in 0..request.max_pages {
         let response = match state
             .gateway
@@ -138,25 +138,31 @@ async fn run_backfill(
             Ok(response) => response,
             Err(error) => {
                 let code = gateway_error_code(&error);
-                ballast_storage::mark_historical_backfill_failed(
+                job = ballast_storage::mark_historical_backfill_failed(
                     &state.database,
                     created.id,
                     &code,
                 )
                 .await
                 .map_err(ApiError::database)?;
+                if job.status == "completed" {
+                    return Ok(Json(job.into()));
+                }
                 return Err(ApiError::gateway(error));
             }
         };
         let next_cursor = millis(response.next_cursor_ms, "next_cursor_ms")?;
         if let Err(error) = validate_historical_cursor(cursor, next_cursor, response.exhausted) {
-            ballast_storage::mark_historical_backfill_failed(
+            job = ballast_storage::mark_historical_backfill_failed(
                 &state.database,
                 created.id,
                 "historical_cursor_not_advanced",
             )
             .await
             .map_err(ApiError::database)?;
+            if job.status == "completed" {
+                return Ok(Json(job.into()));
+            }
             return Err(error);
         }
         let observed_at = millis(response.observed_at_ms, "observed_at_ms")?;
@@ -177,7 +183,7 @@ async fn run_backfill(
                     })
                 })
                 .collect::<ApiResult<Vec<_>>>()?;
-            ballast_storage::persist_candle_batch(
+            job = ballast_storage::persist_candle_batch(
                 &state.database,
                 created.id,
                 instrument.id,
@@ -204,7 +210,7 @@ async fn run_backfill(
                     })
                 })
                 .collect::<ApiResult<Vec<_>>>()?;
-            ballast_storage::persist_trade_batch(
+            job = ballast_storage::persist_trade_batch(
                 &state.database,
                 created.id,
                 instrument.id,
@@ -215,8 +221,8 @@ async fn run_backfill(
             .await
             .map_err(ApiError::database)?;
         }
-        cursor = next_cursor;
-        if response.exhausted {
+        cursor = job.cursor_at;
+        if job.status == "completed" {
             break;
         }
     }
@@ -594,6 +600,8 @@ impl From<StoredHistoricalBackfill> for BackfillView {
 
 #[cfg(test)]
 mod tests {
+    use ballast_core::{Exchange, Instrument, InstrumentId};
+
     use super::*;
 
     #[test]
@@ -636,5 +644,83 @@ mod tests {
         let cursor = DateTime::from_timestamp_millis(1_001).unwrap();
         assert!(validate_historical_cursor(cursor, cursor, false).is_err());
         assert!(validate_historical_cursor(cursor, cursor, true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn concurrent_completed_requests_return_without_calling_gateway() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("TEST_DATABASE_URL is not set; skipping history API integration test");
+            return;
+        };
+        let pool = ballast_storage::connect(&database_url).await.unwrap();
+        ballast_storage::migrate(&pool).await.unwrap();
+        let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+        let symbol = format!("API-HISTORY/USDT-{suffix}");
+        let instrument = Instrument {
+            id: InstrumentId::new(Exchange::Okx, MarketKind::Spot, &symbol).unwrap(),
+            exchange_symbol: format!("APIHISTORYUSDT{suffix}"),
+            base_asset: "API-HISTORY".to_owned(),
+            quote_asset: "USDT".to_owned(),
+            settle_asset: None,
+            contract_kind: None,
+            contract_size: None,
+            price_tick: Decimal::new(1, 2),
+            quantity_step: Decimal::new(1, 3),
+            minimum_quantity: None,
+            minimum_notional: None,
+            maker_fee_rate: None,
+            taker_fee_rate: None,
+            active: true,
+        };
+        let stored = ballast_storage::upsert_instruments(&pool, &[instrument])
+            .await
+            .unwrap()
+            .remove(0);
+        let start =
+            DateTime::from_timestamp_micros((Utc::now() - Duration::minutes(2)).timestamp_micros())
+                .unwrap();
+        let end = start + Duration::minutes(1);
+        let key = format!("api-completed-{suffix}");
+        let job = ballast_storage::create_or_get_historical_backfill(
+            &pool,
+            &NewHistoricalBackfill {
+                idempotency_key: key.clone(),
+                instrument_id: stored.id,
+                data_type: "trades".to_owned(),
+                timeframe: None,
+                start_at: start,
+                end_at: end,
+            },
+        )
+        .await
+        .unwrap();
+        ballast_storage::persist_trade_batch(&pool, job.id, stored.id, &[], end, true)
+            .await
+            .unwrap();
+        let state = AppState {
+            database: pool,
+            gateway: ballast_gateway_client::GatewayClient::connect_lazy("http://127.0.0.1:1"),
+            metrics: crate::metrics::AppMetrics::new().unwrap(),
+        };
+        let request = BackfillRequest {
+            exchange: "okx".to_owned(),
+            market_kind: "spot".to_owned(),
+            symbol,
+            data_type: "trades".to_owned(),
+            timeframe: None,
+            start_at: start,
+            end_at: end,
+            idempotency_key: key,
+            page_limit: 500,
+            max_pages: 25,
+        };
+        let (first, second) = tokio::join!(
+            run_backfill(State(state.clone()), Json(request.clone())),
+            run_backfill(State(state), Json(request)),
+        );
+        for response in [first.unwrap().0, second.unwrap().0] {
+            assert_eq!(response.status, "completed");
+            assert_eq!(response.cursor_at, end);
+        }
     }
 }

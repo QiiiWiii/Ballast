@@ -546,6 +546,186 @@ async fn historical_backfill_is_resumable_and_deduplicated() {
 }
 
 #[tokio::test]
+async fn historical_backfill_transitions_are_monotonic_under_concurrency() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+        return;
+    };
+    let pool = ballast_storage::connect(&database_url).await.unwrap();
+    ballast_storage::migrate(&pool).await.unwrap();
+    let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    let symbol = format!("MONOTONIC/USDT-{suffix}");
+    let instrument = Instrument {
+        id: InstrumentId::new(Exchange::Okx, MarketKind::Spot, &symbol).unwrap(),
+        exchange_symbol: format!("MONOTONICUSDT{suffix}"),
+        base_asset: "MONOTONIC".to_owned(),
+        quote_asset: "USDT".to_owned(),
+        settle_asset: None,
+        contract_kind: None,
+        contract_size: None,
+        price_tick: Decimal::new(1, 2),
+        quantity_step: Decimal::new(1, 3),
+        minimum_quantity: None,
+        minimum_notional: None,
+        maker_fee_rate: None,
+        taker_fee_rate: None,
+        active: true,
+    };
+    let instrument = ballast_storage::upsert_instruments(&pool, &[instrument])
+        .await
+        .unwrap()
+        .remove(0);
+    let start = chrono::DateTime::from_timestamp_micros(
+        (Utc::now() - Duration::hours(2)).timestamp_micros(),
+    )
+    .unwrap();
+    let middle = start + Duration::minutes(1);
+    let end = start + Duration::minutes(2);
+    let trade = |id: &str, seconds: i64| HistoricalTrade {
+        exchange_trade_id: format!("{id}-{suffix}"),
+        trade_time: start + Duration::seconds(seconds),
+        price: Decimal::new(100, 0),
+        quantity: Decimal::ONE,
+        taker_side: "buy".to_owned(),
+        source: "okx".to_owned(),
+        observed_at: Utc::now(),
+    };
+
+    let pending_job = ballast_storage::create_or_get_historical_backfill(
+        &pool,
+        &NewHistoricalBackfill {
+            idempotency_key: format!("parallel-pending-{suffix}"),
+            instrument_id: instrument.id,
+            data_type: "trades".to_owned(),
+            timeframe: None,
+            start_at: start,
+            end_at: end,
+        },
+    )
+    .await
+    .unwrap();
+    let first_page = vec![trade("same-page", 10)];
+    let (first, second) = tokio::join!(
+        ballast_storage::persist_trade_batch(
+            &pool,
+            pending_job.id,
+            instrument.id,
+            &first_page,
+            middle,
+            false,
+        ),
+        ballast_storage::persist_trade_batch(
+            &pool,
+            pending_job.id,
+            instrument.id,
+            &first_page,
+            middle,
+            false,
+        )
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.cursor_at, middle);
+    assert_eq!(second.cursor_at, middle);
+    let pending = ballast_storage::get_historical_backfill(&pool, pending_job.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.status, "pending");
+    assert_eq!(pending.rows_written, 1);
+
+    let completion_page = vec![trade("completion", 70)];
+    let stale_page = vec![trade("stale", 20)];
+    let (completed, continued) = tokio::join!(
+        ballast_storage::persist_trade_batch(
+            &pool,
+            pending_job.id,
+            instrument.id,
+            &completion_page,
+            end,
+            true,
+        ),
+        ballast_storage::persist_trade_batch(
+            &pool,
+            pending_job.id,
+            instrument.id,
+            &stale_page,
+            middle,
+            false,
+        )
+    );
+    assert_eq!(completed.unwrap().status, "completed");
+    assert!(matches!(
+        continued.unwrap().status.as_str(),
+        "pending" | "completed"
+    ));
+    let completed_job = ballast_storage::get_historical_backfill(&pool, pending_job.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completed_job.status, "completed");
+    assert_eq!(completed_job.cursor_at, end);
+
+    let failure_job = ballast_storage::create_or_get_historical_backfill(
+        &pool,
+        &NewHistoricalBackfill {
+            idempotency_key: format!("parallel-failure-{suffix}"),
+            instrument_id: instrument.id,
+            data_type: "trades".to_owned(),
+            timeframe: None,
+            start_at: start,
+            end_at: end,
+        },
+    )
+    .await
+    .unwrap();
+    let failure_completion = vec![trade("failure-completion", 80)];
+    let (completed, failed) = tokio::join!(
+        ballast_storage::persist_trade_batch(
+            &pool,
+            failure_job.id,
+            instrument.id,
+            &failure_completion,
+            end,
+            true,
+        ),
+        ballast_storage::mark_historical_backfill_failed(
+            &pool,
+            failure_job.id,
+            "gateway_unavailable",
+        )
+    );
+    assert_eq!(completed.unwrap().status, "completed");
+    let failed = failed.unwrap();
+    assert!(failed.status == "failed" || failed.status == "completed");
+    let final_job = ballast_storage::mark_historical_backfill_running(&pool, failure_job.id)
+        .await
+        .unwrap();
+    assert_eq!(final_job.status, "completed");
+    assert_eq!(final_job.cursor_at, end);
+    assert_eq!(final_job.last_error_code, None);
+
+    let repeated = ballast_storage::persist_trade_batch(
+        &pool,
+        failure_job.id,
+        instrument.id,
+        &[trade("after-completion", 90)],
+        middle,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(repeated.status, "completed");
+    assert_eq!(repeated.rows_written, final_job.rows_written);
+    let regression =
+        sqlx::query("UPDATE historical_backfill_jobs SET status = 'failed' WHERE id = $1")
+            .bind(failure_job.id)
+            .execute(&pool)
+            .await;
+    assert!(regression.is_err());
+}
+
+#[tokio::test]
 async fn historical_trade_snapshot_excludes_concurrent_earlier_inserts() {
     let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
         eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");

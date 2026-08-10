@@ -35,6 +35,8 @@ export interface ExchangeCapabilities {
   readonly fetchOrderBook: boolean;
   readonly watchOrderBook: boolean;
   readonly watchTrades: boolean;
+  readonly fetchOhlcv: boolean;
+  readonly fetchTrades: boolean;
 }
 
 export interface BookLevel {
@@ -62,12 +64,46 @@ export interface Trade {
   readonly gatewayReceivedAtMs: number;
 }
 
+export type HistoricalDataType = "ohlcv" | "trades";
+
+export interface HistoricalCandle {
+  readonly openTimeMs: number;
+  readonly open: string;
+  readonly high: string;
+  readonly low: string;
+  readonly close: string;
+  readonly volume: string;
+}
+
+export interface HistoricalTrade {
+  readonly exchangeTradeId: string;
+  readonly tradeTimeMs: number;
+  readonly price: string;
+  readonly quantity: string;
+  readonly takerSide: TradeSide;
+}
+
+export interface HistoricalBatch {
+  readonly candles: readonly HistoricalCandle[];
+  readonly trades: readonly HistoricalTrade[];
+  readonly nextCursorMs: number;
+  readonly exhausted: boolean;
+}
+
 export interface MarketDataAdapter {
   readonly exchange: ExchangeId;
 
   listInstruments(reload: boolean): Promise<readonly Instrument[]>;
   capabilities(): Promise<ExchangeCapabilities>;
   getOrderBook(instrument: InstrumentKey, depth: number): Promise<OrderBook>;
+  fetchHistoricalBatch(
+    instrument: InstrumentKey,
+    dataType: HistoricalDataType,
+    timeframe: string | undefined,
+    cursorMs: number,
+    endMs: number,
+    limit: number,
+  ): Promise<HistoricalBatch>;
   watchOrderBook(instrument: InstrumentKey, depth: number): Promise<OrderBook>;
   watchTrades(instrument: InstrumentKey): Promise<readonly Trade[]>;
   close(): Promise<void>;

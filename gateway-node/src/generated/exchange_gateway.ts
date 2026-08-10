@@ -16,10 +16,15 @@ export interface ProtoGrpcType {
         ContractKind: EnumTypeDefinition
         Exchange: EnumTypeDefinition
         ExchangeCapabilities: MessageTypeDefinition
+        FetchHistoricalBatchRequest: MessageTypeDefinition
+        FetchHistoricalBatchResponse: MessageTypeDefinition
         GetCapabilitiesRequest: MessageTypeDefinition
         GetOrderBookRequest: MessageTypeDefinition
         HealthRequest: MessageTypeDefinition
         HealthResponse: MessageTypeDefinition
+        HistoricalCandle: MessageTypeDefinition
+        HistoricalDataType: EnumTypeDefinition
+        HistoricalTrade: MessageTypeDefinition
         Instrument: MessageTypeDefinition
         InstrumentKey: MessageTypeDefinition
         ListInstrumentsRequest: MessageTypeDefinition

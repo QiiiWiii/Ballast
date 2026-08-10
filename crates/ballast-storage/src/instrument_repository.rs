@@ -160,6 +160,25 @@ pub async fn get_instrument(
         .transpose()
 }
 
+pub async fn get_instrument_by_key(
+    pool: &DatabasePool,
+    exchange: Exchange,
+    market_kind: MarketKind,
+    symbol: &str,
+) -> Result<Option<StoredInstrument>, sqlx::Error> {
+    sqlx::query(
+        "SELECT * FROM instruments WHERE exchange = $1 AND market_kind = $2 AND symbol = $3",
+    )
+    .bind(exchange_text(exchange))
+    .bind(market_kind_text(market_kind))
+    .bind(symbol)
+    .fetch_optional(pool)
+    .await?
+    .as_ref()
+    .map(row_to_instrument)
+    .transpose()
+}
+
 fn row_to_instrument(row: &sqlx::postgres::PgRow) -> Result<StoredInstrument, sqlx::Error> {
     let exchange = parse_exchange(row.try_get("exchange")?)?;
     let market_kind = parse_market_kind(row.try_get("market_kind")?)?;

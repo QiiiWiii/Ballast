@@ -10,6 +10,8 @@ export interface ExchangeCapabilities {
   'fetchOrderBook'?: (boolean);
   'watchOrderBook'?: (boolean);
   'watchTrades'?: (boolean);
+  'fetchOhlcv'?: (boolean);
+  'fetchTrades'?: (boolean);
 }
 
 export interface ExchangeCapabilities__Output {
@@ -20,4 +22,6 @@ export interface ExchangeCapabilities__Output {
   'fetchOrderBook'?: (boolean);
   'watchOrderBook'?: (boolean);
   'watchTrades'?: (boolean);
+  'fetchOhlcv'?: (boolean);
+  'fetchTrades'?: (boolean);
 }

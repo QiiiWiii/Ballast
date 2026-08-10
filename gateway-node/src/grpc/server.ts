@@ -6,6 +6,7 @@ import type {
   ContractKind,
   ExchangeCapabilities as DomainCapabilities,
   ExchangeId,
+  HistoricalDataType,
   Instrument as DomainInstrument,
   InstrumentKey,
   MarketKind,
@@ -21,6 +22,9 @@ import type { AdapterHealth } from "../generated/ballast/gateway/v1/AdapterHealt
 import type { ExchangeCapabilities } from "../generated/ballast/gateway/v1/ExchangeCapabilities.js";
 import type { GetCapabilitiesRequest__Output } from "../generated/ballast/gateway/v1/GetCapabilitiesRequest.js";
 import type { GetOrderBookRequest__Output } from "../generated/ballast/gateway/v1/GetOrderBookRequest.js";
+import type { FetchHistoricalBatchRequest__Output } from "../generated/ballast/gateway/v1/FetchHistoricalBatchRequest.js";
+import type { FetchHistoricalBatchResponse } from "../generated/ballast/gateway/v1/FetchHistoricalBatchResponse.js";
+import { HistoricalDataType as ProtoHistoricalDataType } from "../generated/ballast/gateway/v1/HistoricalDataType.js";
 import type { HealthResponse } from "../generated/ballast/gateway/v1/HealthResponse.js";
 import type { Instrument } from "../generated/ballast/gateway/v1/Instrument.js";
 import type { InstrumentKey as ProtoInstrumentKey } from "../generated/ballast/gateway/v1/InstrumentKey.js";
@@ -111,6 +115,37 @@ export async function startGrpcServer(
         throw error;
       }
     }, logger),
+    FetchHistoricalBatch: asyncUnary(async (request) => {
+      const instrument = instrumentFromHistoricalRequest(request);
+      const adapter = registry.get(instrument.exchange);
+      try {
+        const batch = await adapter.fetchHistoricalBatch(
+          instrument,
+          historicalDataTypeFromProto(request.dataType ?? ProtoHistoricalDataType.HISTORICAL_DATA_TYPE_UNSPECIFIED),
+          request.timeframe,
+          Number(request.cursorMs),
+          Number(request.endMs),
+          normalizeHistoricalLimit(request.limit ?? 0),
+        );
+        registry.markSuccess(instrument.exchange);
+        return {
+          candles: batch.candles.map((row) => ({
+            openTimeMs: row.openTimeMs.toString(), open: row.open, high: row.high,
+            low: row.low, close: row.close, volume: row.volume,
+          })),
+          trades: batch.trades.map((row) => ({
+            exchangeTradeId: row.exchangeTradeId, tradeTimeMs: row.tradeTimeMs.toString(),
+            price: row.price, quantity: row.quantity, takerSide: row.takerSide,
+          })),
+          nextCursorMs: batch.nextCursorMs.toString(),
+          exhausted: batch.exhausted,
+          observedAtMs: Date.now().toString(),
+        } satisfies FetchHistoricalBatchResponse;
+      } catch (error) {
+        registry.markFailure(instrument.exchange, error);
+        throw error;
+      }
+    }, logger),
     WatchOrderBook: (call) => {
       void streamOrderBooks(call, registry, config, logger);
     },
@@ -145,6 +180,40 @@ export async function startGrpcServer(
   server.addService(algorithmicTradingService.service, algorithmicTradingHandlers);
   await bind(server, config.bind);
   return { server, closeAdapters: () => registry.close() };
+}
+
+function instrumentFromHistoricalRequest(request: FetchHistoricalBatchRequest__Output): InstrumentKey {
+  if (Number(request.cursorMs) < 0 || Number(request.endMs) <= Number(request.cursorMs)) {
+    throw new Error("invalid historical time range");
+  }
+  if (request.instrument === null || request.instrument === undefined) {
+    throw new Error("instrument is required");
+  }
+  return {
+    exchange: exchangeFromProto(request.instrument.exchange),
+    marketKind: marketKindFromProto(request.instrument.marketKind),
+    symbol: requiredRequestText(request.instrument.symbol, "instrument.symbol"),
+  };
+}
+
+function requiredRequestText(value: string | null | undefined, field: string): string {
+  if (value === null || value === undefined || value.trim().length === 0) {
+    throw new Error(`${field} is required`);
+  }
+  return value;
+}
+
+function historicalDataTypeFromProto(value: number): HistoricalDataType {
+  if (value === ProtoHistoricalDataType.HISTORICAL_DATA_TYPE_OHLCV) return "ohlcv";
+  if (value === ProtoHistoricalDataType.HISTORICAL_DATA_TYPE_TRADES) return "trades";
+  throw new Error("historical data type is required");
+}
+
+function normalizeHistoricalLimit(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 1_000) {
+    throw new Error("historical limit must be between 1 and 1000");
+  }
+  return value;
 }
 
 export function tradingCapabilities(
@@ -389,6 +458,8 @@ function toProtoCapabilities(value: DomainCapabilities): ExchangeCapabilities {
     fetchOrderBook: value.fetchOrderBook,
     watchOrderBook: value.watchOrderBook,
     watchTrades: value.watchTrades,
+    fetchOhlcv: value.fetchOhlcv,
+    fetchTrades: value.fetchTrades,
   };
 }
 

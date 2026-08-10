@@ -4,7 +4,7 @@ import ccxt from "ccxt";
 import type { Exchange as CcxtExchange, MarketInterface as CcxtMarket } from "ccxt";
 
 import type { ExchangeId } from "./exchanges/adapter.js";
-import { normalizeInstrument, normalizeOrderBook, normalizeTrade } from "./exchanges/ccxt-adapter.js";
+import { nextHistoricalCursor, normalizeHistoricalCandle, normalizeHistoricalTrade, normalizeInstrument, normalizeOrderBook, normalizeTrade, withReadRetry } from "./exchanges/ccxt-adapter.js";
 
 const exchanges: readonly ExchangeId[] = ["binance", "okx", "bybit", "gate_io", "bitget"];
 const decimalPlacesClient = { precisionMode: ccxt.DECIMAL_PLACES } as CcxtExchange;
@@ -39,6 +39,45 @@ test("fixture trades have stable exchange-scoped event ids", () => {
   assert.equal(trade.eventId, "okx:trade-1");
   assert.equal(trade.quantity, "3");
   assert.equal(trade.takerSide, "sell");
+});
+
+test("historical fixtures preserve timestamps, ids, and decimal strings", () => {
+  assert.deepEqual(normalizeHistoricalCandle([7, 100, 110, 90, 105, 12.5]), {
+    openTimeMs: 7, open: "100", high: "110", low: "90", close: "105", volume: "12.5",
+  });
+  assert.deepEqual(normalizeHistoricalTrade({ id: "t-1", timestamp: 8, price: 105, amount: 2, side: "buy" } as never), {
+    exchangeTradeId: "t-1", tradeTimeMs: 8, price: "105", quantity: "2", takerSide: "buy",
+  });
+});
+
+test("historical trades without exchange ids fail explicitly", () => {
+  assert.throws(() => normalizeHistoricalTrade({ timestamp: 8, price: 105, amount: 2 } as never), /trade.id/);
+});
+
+test("historical pagination advances and clamps to the requested boundary", () => {
+  assert.equal(nextHistoricalCursor([1_000, 2_000], 1_000, 2_500, 1_000), 2_500);
+  assert.equal(nextHistoricalCursor([], 1_000, 2_500, 1_000), 2_500);
+  assert.equal(nextHistoricalCursor([1_000], 1_000, 5_000, 0), 1_000);
+});
+
+test("read-only historical calls retry transient failures", async () => {
+  let attempts = 0;
+  const value = await withReadRetry(async () => {
+    attempts += 1;
+    if (attempts < 3) throw new Error("rate limited");
+    return "ok";
+  });
+  assert.equal(value, "ok");
+  assert.equal(attempts, 3);
+});
+
+test("partial historical failures surface after the retry budget", async () => {
+  let attempts = 0;
+  await assert.rejects(withReadRetry(async () => {
+    attempts += 1;
+    throw new Error("upstream unavailable");
+  }), /upstream unavailable/);
+  assert.equal(attempts, 3);
 });
 
 test("missing precision fails explicitly", () => {

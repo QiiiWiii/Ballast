@@ -55,6 +55,8 @@ pub struct Capabilities {
     pub fetch_order_book: bool,
     pub watch_order_book: bool,
     pub watch_trades: bool,
+    pub fetch_ohlcv: bool,
+    pub fetch_trades: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,8 @@ impl GatewayClient {
             fetch_order_book: response.fetch_order_book,
             watch_order_book: response.watch_order_book,
             watch_trades: response.watch_trades,
+            fetch_ohlcv: response.fetch_ohlcv,
+            fetch_trades: response.fetch_trades,
         })
     }
 
@@ -143,6 +147,29 @@ impl GatewayClient {
             .await?
             .into_inner();
         order_book_from_proto(response)
+    }
+
+    pub async fn fetch_historical_batch(
+        &self,
+        instrument: &InstrumentId,
+        data_type: proto::HistoricalDataType,
+        timeframe: Option<String>,
+        cursor_ms: i64,
+        end_ms: i64,
+        limit: u32,
+    ) -> Result<proto::FetchHistoricalBatchResponse, GatewayClientError> {
+        let mut client = self.market_data.clone();
+        Ok(client
+            .fetch_historical_batch(proto::FetchHistoricalBatchRequest {
+                instrument: Some(instrument_key_to_proto(instrument)),
+                data_type: data_type as i32,
+                timeframe,
+                cursor_ms,
+                end_ms,
+                limit,
+            })
+            .await?
+            .into_inner())
     }
 
     pub async fn watch_trades(

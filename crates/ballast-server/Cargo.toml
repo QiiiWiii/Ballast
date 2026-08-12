@@ -7,18 +7,22 @@ publish.workspace = true
 
 [dependencies]
 axum.workspace = true
+ballast-alpaca = { path = "../ballast-alpaca" }
 ballast-core = { path = "../ballast-core" }
 ballast-execution = { path = "../ballast-execution" }
 ballast-gateway-client = { path = "../ballast-gateway-client" }
 ballast-simulator = { path = "../ballast-simulator" }
 ballast-storage = { path = "../ballast-storage" }
 ballast-strategies = { path = "../ballast-strategies" }
+ballast-research = { path = "../ballast-research" }
 chrono.workspace = true
 futures-util.workspace = true
+hex.workspace = true
 prometheus.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tower-http.workspace = true

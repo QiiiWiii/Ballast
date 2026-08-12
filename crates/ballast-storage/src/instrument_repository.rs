@@ -42,9 +42,11 @@ async fn upsert_instrument(
             id, exchange, market_kind, symbol, exchange_symbol, base_asset, quote_asset,
             settle_asset, contract_kind, contract_size, price_tick, quantity_step,
             minimum_quantity, minimum_notional, maker_fee_rate, taker_fee_rate,
-            active, observed_at
+            active, observed_at, asset_class, instrument_kind, market_data_provider,
+            market_data_dataset, execution_venue
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+            'crypto', $3, 'ccxt', NULL, $2
         )
         ON CONFLICT (exchange, market_kind, symbol) DO UPDATE SET
             exchange_symbol = EXCLUDED.exchange_symbol,
@@ -61,6 +63,11 @@ async fn upsert_instrument(
             taker_fee_rate = EXCLUDED.taker_fee_rate,
             active = EXCLUDED.active,
             observed_at = EXCLUDED.observed_at,
+            asset_class = EXCLUDED.asset_class,
+            instrument_kind = EXCLUDED.instrument_kind,
+            market_data_provider = EXCLUDED.market_data_provider,
+            market_data_dataset = EXCLUDED.market_data_dataset,
+            execution_venue = EXCLUDED.execution_venue,
             updated_at = now()
         RETURNING id
         "#,

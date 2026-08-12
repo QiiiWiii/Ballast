@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use super::{ApiError, ApiResult, parse_exchange};
+use super::{ApiError, ApiResult};
+use super::util::parse_exchange;
 use crate::AppState;
 
 pub(super) fn routes() -> Router<AppState> {

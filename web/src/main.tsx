@@ -15,9 +15,10 @@ import { createRoot } from "react-dom/client";
 import { AppShell } from "./components";
 import {
   AccountsPage, AnalyticsPage, ApprovalsPage, ControlRoomPage, CreateExecutionPage,
-  ExecutionDetailPage, ExecutionsPage, HedgingPage, RiskPage, RoadmapPage, StrategiesPage,
+  ExecutionDetailPage, ExecutionsPage, HedgingPage, RiskPage, RoadmapPage,
   StrategyDetailPage, SystemPage, VenueDetailPage, VenuesPage,
 } from "./pages";
+import { StrategiesPage } from "./researchLab";
 
 const rootRoute = createRootRoute({ component: AppShell });
 const controlRoomRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: ControlRoomPage });

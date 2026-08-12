@@ -29,3 +29,5 @@ web/dist/
 # Coverage
 coverage/
 lcov.info
+
+.cargo-docker/

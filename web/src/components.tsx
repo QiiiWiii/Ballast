@@ -3,9 +3,13 @@ import type { TFunction } from "i18next";
 import { ReactNode, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ExecutionTask } from "./api";
+import type { ExecutionTask, StrategyTemplate } from "./api";
 import { EventStreamStatusContext, useEventStream } from "./hooks";
 import i18n from "./i18n";
+
+export function currentVersion(template: StrategyTemplate) {
+  return template.versions.find((version) => version.version === template.current_version) ?? template.versions[0];
+}
 
 type NavItem = readonly [string, string];
 

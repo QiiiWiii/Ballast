@@ -48,6 +48,7 @@ pub struct StoredStrategyTemplate {
     pub name: String,
     pub description: String,
     pub status: String,
+    pub scope: String,
     pub current_version: i32,
     pub usage_count: i64,
     pub created_at: DateTime<Utc>,
@@ -60,6 +61,7 @@ pub struct StoredStrategyTemplateVersion {
     pub template_id: Uuid,
     pub version: i32,
     pub strategy_kind: String,
+    pub algorithm_config: serde_json::Value,
     pub quantity_unit: String,
     pub duration_seconds: i64,
     pub slice_interval_ms: i64,
@@ -82,7 +84,7 @@ pub async fn create_strategy_template(
     let template_id = Uuid::now_v7();
     let version_id = Uuid::now_v7();
     let mut transaction = pool.begin().await?;
-    sqlx::query("INSERT INTO strategy_templates (id, name, description) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO strategy_templates (id, name, description, scope) VALUES ($1, $2, $3, 'paper_execution')")
         .bind(template_id)
         .bind(&input.name)
         .bind(&input.description)
@@ -94,13 +96,14 @@ pub async fn create_strategy_template(
             id, template_id, version, strategy_kind, quantity_unit,
             duration_seconds, slice_interval_ms, max_slippage_bps,
             participation_rate, max_slice_amount, change_note, execution_backend,
-            venue_exchange, venue_market_kind, native_algorithm, native_params
-        ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            venue_exchange, venue_market_kind, native_algorithm, native_params,
+            algorithm_config
+        ) VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         "#,
     )
     .bind(version_id)
     .bind(template_id)
-    .bind(input.strategy_kind)
+    .bind(&input.strategy_kind)
     .bind(input.quantity_unit)
     .bind(input.duration_seconds)
     .bind(input.slice_interval_ms)
@@ -113,6 +116,11 @@ pub async fn create_strategy_template(
     .bind(input.venue_market_kind)
     .bind(input.native_algorithm)
     .bind(input.native_params)
+    .bind(algorithm_config(
+        &input.strategy_kind,
+        input.slice_interval_ms,
+        input.participation_rate,
+    ))
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
@@ -158,14 +166,15 @@ pub async fn create_strategy_template_version(
             id, template_id, version, strategy_kind, quantity_unit,
             duration_seconds, slice_interval_ms, max_slippage_bps,
             participation_rate, max_slice_amount, change_note, execution_backend,
-            venue_exchange, venue_market_kind, native_algorithm, native_params
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            venue_exchange, venue_market_kind, native_algorithm, native_params,
+            algorithm_config
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         "#,
     )
     .bind(version_id)
     .bind(template_id)
     .bind(next_version)
-    .bind(input.strategy_kind)
+    .bind(&input.strategy_kind)
     .bind(input.quantity_unit)
     .bind(input.duration_seconds)
     .bind(input.slice_interval_ms)
@@ -178,6 +187,11 @@ pub async fn create_strategy_template_version(
     .bind(input.venue_market_kind)
     .bind(input.native_algorithm)
     .bind(input.native_params)
+    .bind(algorithm_config(
+        &input.strategy_kind,
+        input.slice_interval_ms,
+        input.participation_rate,
+    ))
     .execute(&mut *transaction)
     .await?;
     sqlx::query("UPDATE strategy_templates SET updated_at = now() WHERE id = $1")
@@ -273,6 +287,7 @@ fn row_to_template(row: &sqlx::postgres::PgRow) -> Result<StoredStrategyTemplate
         name: row.try_get("name")?,
         description: row.try_get("description")?,
         status: row.try_get("status")?,
+        scope: row.try_get("scope")?,
         current_version: row.try_get("current_version")?,
         usage_count: row.try_get("usage_count")?,
         created_at: row.try_get("created_at")?,
@@ -288,6 +303,7 @@ fn row_to_version(
         template_id: row.try_get("template_id")?,
         version: row.try_get("version")?,
         strategy_kind: row.try_get("strategy_kind")?,
+        algorithm_config: row.try_get("algorithm_config")?,
         quantity_unit: row.try_get("quantity_unit")?,
         duration_seconds: row.try_get("duration_seconds")?,
         slice_interval_ms: row.try_get("slice_interval_ms")?,
@@ -302,4 +318,22 @@ fn row_to_version(
         change_note: row.try_get("change_note")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn algorithm_config(
+    strategy_kind: &str,
+    slice_interval_ms: i64,
+    participation_rate: Option<Decimal>,
+) -> serde_json::Value {
+    match strategy_kind {
+        "twap" => serde_json::json!({
+            "algorithm": "twap",
+            "slice_interval_seconds": slice_interval_ms / 1000,
+        }),
+        "pov" => serde_json::json!({
+            "algorithm": "pov",
+            "participation_rate": participation_rate.map(|value| value.to_string()),
+        }),
+        _ => serde_json::json!({ "algorithm": strategy_kind }),
+    }
 }

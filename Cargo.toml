@@ -6,6 +6,8 @@ members = [
   "crates/ballast-simulator",
   "crates/ballast-gateway-client",
   "crates/ballast-storage",
+  "crates/ballast-alpaca",
+  "crates/ballast-research",
   "crates/ballast-server",
 ]
 resolver = "2"
@@ -22,12 +24,16 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 barter-instrument = "=0.3.1"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 futures-util = "0.3"
+hex = "0.4"
 prost = "0.13"
 prometheus = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio-rustls",
   "postgres",
@@ -44,3 +50,4 @@ tower-http = { version = "0.6", features = ["cors", "request-id", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v7"] }
+zstd = "0.13"

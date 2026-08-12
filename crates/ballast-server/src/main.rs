@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -18,6 +18,8 @@ use tracing_subscriber::EnvFilter;
 mod api;
 mod execution_worker;
 mod metrics;
+mod order_book_cache;
+mod research_api;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -31,6 +33,7 @@ pub(crate) struct AppState {
     database: DatabasePool,
     gateway: GatewayClient,
     metrics: metrics::AppMetrics,
+    research_data_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -49,6 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
         .parse::<SocketAddr>()?;
     let database_url = std::env::var("DATABASE_URL")?;
+    let research_data_dir = PathBuf::from(std::env::var("BALLAST_RESEARCH_DATA_DIR")?);
+    tokio::fs::create_dir_all(&research_data_dir).await?;
     let database = ballast_storage::connect(&database_url).await?;
     ballast_storage::migrate(&database).await?;
     let gateway_endpoint = std::env::var("BALLAST_GATEWAY_ENDPOINT")
@@ -56,10 +61,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gateway = GatewayClient::connect(gateway_endpoint).await?;
     let metrics = metrics::AppMetrics::new()?;
     let trade_volume = execution_worker::TradeVolumeTracker::default();
+    let order_books = order_book_cache::OrderBookCache::default();
     execution_worker::spawn_worker(
         database.clone(),
         gateway.clone(),
         trade_volume,
+        order_books,
         metrics.clone(),
     );
 
@@ -78,12 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/metrics", get(metrics::endpoint))
         .merge(api::routes())
+        .merge(research_api::routes())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             database,
             gateway,
             metrics,
+            research_data_dir,
         });
     let listener = tokio::net::TcpListener::bind(bind).await?;
 

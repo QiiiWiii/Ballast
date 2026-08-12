@@ -2,8 +2,8 @@ use ballast_core::{
     Exchange, Instrument, InstrumentId, MarketKind, QuantityUnit, Side, StrategyKind,
 };
 use ballast_storage::{
-    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewStrategyTemplate,
-    NewStrategyTemplateVersion, SliceRecord,
+    HistoricalCandle, NewDownloadJob, NewExecutionTask, NewHistoricalBackfill,
+    NewStrategyTemplate, NewStrategyTemplateVersion, SliceRecord,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -392,4 +392,144 @@ async fn historical_backfill_is_resumable_and_deduplicated() {
         completed.cursor_at.timestamp_micros(),
         end.timestamp_micros()
     );
+}
+
+#[tokio::test]
+async fn research_jobs_and_validation_runs_are_stateful_and_idempotent() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+        return;
+    };
+    let pool = ballast_storage::connect(&database_url).await.unwrap();
+    ballast_storage::migrate(&pool).await.unwrap();
+    let cases = ballast_storage::list_validation_cases(&pool).await.unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].symbol, "TSLA");
+    assert_eq!(cases[0].execution_venue, None);
+    let research_templates = ballast_storage::list_strategy_templates(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|template| template.scope == "research")
+        .collect::<Vec<_>>();
+    assert_eq!(research_templates.len(), 4);
+
+    let end_at = Utc::now() - Duration::days(1);
+    let request = NewDownloadJob {
+        symbol: "TSLA".to_owned(),
+        start_at: end_at - Duration::days(200),
+        end_at,
+        requested_sessions: 120,
+    };
+    let first_job = ballast_storage::create_download_job(&pool, request.clone())
+        .await
+        .unwrap();
+    let duplicate_job = ballast_storage::create_download_job(&pool, request)
+        .await
+        .unwrap();
+    assert_eq!(first_job.id, duplicate_job.id);
+    assert!(
+        ballast_storage::set_download_job_state(
+            &pool,
+            first_job.id,
+            &["queued"],
+            "downloading",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !ballast_storage::set_download_job_state(
+            &pool,
+            first_job.id,
+            &["queued"],
+            "downloading",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    );
+
+    let strategy_version_ids = [
+        "00000000-0000-7000-8000-000000000621",
+        "00000000-0000-7000-8000-000000000622",
+        "00000000-0000-7000-8000-000000000623",
+        "00000000-0000-7000-8000-000000000624",
+    ]
+    .into_iter()
+    .map(|value| uuid::Uuid::parse_str(value).unwrap())
+    .collect::<Vec<_>>();
+    let run = ballast_storage::create_validation_run(&pool, &cases[0], strategy_version_ids)
+        .await
+        .unwrap();
+    assert!(
+        ballast_storage::set_validation_run_state(
+            &pool,
+            run.id,
+            &["queued"],
+            "preparing",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        ballast_storage::set_validation_run_state(
+            &pool,
+            run.id,
+            &["preparing"],
+            "running",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    );
+    let report = serde_json::json!({ "sessions": [] });
+    assert!(
+        ballast_storage::set_validation_run_state(
+            &pool,
+            run.id,
+            &["running"],
+            "succeeded",
+            Some(&report),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            None,
+        )
+        .await
+        .unwrap()
+    );
+    let decision = ballast_storage::append_validation_decision(
+        &pool,
+        run.id,
+        "validated",
+        "integration decision",
+    )
+    .await
+    .unwrap();
+    assert_eq!(decision.decision, "validated");
+
+    sqlx::query("DELETE FROM validation_decisions WHERE run_id = $1")
+        .bind(run.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM validation_runs WHERE id = $1")
+        .bind(run.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM research_download_jobs WHERE id = $1")
+        .bind(first_job.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 }

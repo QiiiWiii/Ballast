@@ -64,7 +64,29 @@
 
 版本为完整不可变快照。修改模板只能创建新版本，历史任务继续引用原版本。
 
+模板通过 `scope` 区分 `paper_execution` 与 `research`。研究版本使用强类型 `algorithm_config`，案例金额、方向、时间窗和参与率上限不进入策略版本。研究版本不能创建执行任务。
+
 模板必须显式提供 `execution_backend`：`managed_ioc` 或 `venue_native_algo`。native 模板还必须绑定交易所、市场类型和强类型 `native_configuration`。当前纸面任务只接受 managed 模板；native 模板不会被静默改为 managed。
+
+## 策略研究
+
+- `POST /api/v1/research/coverage`：检查 Alpaca Basic/IEX 在目标区间是否返回 TSLA 分钟数据。
+- `GET/POST /api/v1/research/download-jobs`
+- `GET /api/v1/research/download-jobs/{job_id}`
+- `POST /api/v1/research/download-jobs/{job_id}/cancel`
+- `GET /api/v1/validation-cases`
+- `GET/PATCH /api/v1/validation-cases/{case_id}`：可改 `name` / `target_notional_usd` / `max_participation_rate` / `evaluation_sessions`（1–200）；保存创建新 case 版本，历史 run 继续使用各自的 `case_snapshot`。
+- `GET/POST /api/v1/validation-runs`
+- `GET /api/v1/validation-runs/compare?ids=`：比较 2–8 个 run 的聚合指标与最新决策；须先于 `{run_id}` 路由注册。
+- `GET /api/v1/validation-runs/{run_id}`
+- `POST /api/v1/validation-runs/{run_id}/cancel`
+- `GET /api/v1/validation-runs/{run_id}/report`
+- `GET /api/v1/validation-runs/{run_id}/export?format=json|csv&view=aggregates|sessions`：下载附件；`csv` 时 `view` 选择汇总或逐日。
+- `GET/POST /api/v1/validation-runs/{run_id}/decisions`：人工 `validated` / `rejected`，备注最长 1000 字符，只追加不删除。
+
+研究验证固定 TSLA、10:00–11:30 ET 卖出窗口、IEX 代理数据与四个固定研究版本（Immediate / TWAP / POV / VWAP）。下载任务仍固定 120 个交易日；案例 `evaluation_sessions` 可在 1–200 调整（warm-up 固定 20）。覆盖检查不产生数据费用，也不创建下载任务。所有报告携带 `data_quality=iex_proxy`；IEX 成交量不得解释为全美合并市场成交量。内部策略验证实验台不要求 OIDC。
+
+下载状态为 `queued/downloading/verifying/completed/failed/cancelled`，验证状态为 `queued/preparing/running/succeeded/failed/cancelled`。取消和重复状态事件采用条件更新，不能让终态回到运行态。
 
 ## 原生算法与 live 安全状态
 

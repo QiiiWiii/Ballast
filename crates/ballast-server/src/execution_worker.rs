@@ -11,17 +11,48 @@ use ballast_gateway_client::{GatewayClient, proto};
 use ballast_simulator::{BookLevel, estimate_protected_ioc_fill};
 use ballast_storage::{DatabasePool, SliceRecord, StoredExecutionTask};
 use chrono::{DateTime, Utc};
+use futures_util::stream::{self, StreamExt};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::metrics::AppMetrics;
+use crate::{
+    metrics::AppMetrics,
+    order_book_cache::{MAX_BOOK_AGE_MS, OrderBookCache},
+};
 
 #[derive(Clone, Default)]
 pub struct TradeVolumeTracker {
     entries: Arc<Mutex<HashMap<Uuid, Arc<TradeEntry>>>>,
+}
+
+/// Serializes paper ticks that share an instrument so concurrent claim batches
+/// cannot race on residual/slice sequencing for the same market.
+#[derive(Clone, Default)]
+struct InstrumentTickGate {
+    locks: Arc<Mutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
+}
+
+impl InstrumentTickGate {
+    async fn lock(&self, instrument_id: Uuid, metrics: &AppMetrics) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.locks.lock().await;
+            locks
+                .entry(instrument_id)
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        // Prefer try_lock first so uncontended ticks stay cheap.
+        match lock.clone().try_lock_owned() {
+            Ok(guard) => guard,
+            Err(_) => {
+                metrics.instrument_tick_serialized.inc();
+                lock.lock_owned().await
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -257,12 +288,18 @@ const fn exchange_text(value: ballast_core::Exchange) -> &'static str {
     }
 }
 
+/// Cap concurrent paper ticks so gateway/db pressure stays bounded while
+/// different instruments still make progress in the same claim batch.
+const MAX_CONCURRENT_TASKS: usize = 8;
+
 pub fn spawn_worker(
     database: DatabasePool,
     gateway: GatewayClient,
     trade_volume: TradeVolumeTracker,
+    order_books: OrderBookCache,
     metrics: AppMetrics,
 ) {
+    let instrument_gate = InstrumentTickGate::default();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(250));
         loop {
@@ -272,13 +309,32 @@ pub fn spawn_worker(
                 Ok(tasks) => {
                     metrics.worker_batch_size.set(tasks.len() as i64);
                     metrics.claimed_tasks.inc_by(tasks.len() as u64);
-                    for task in tasks {
-                        if let Err(error) =
-                            process_task(&database, &gateway, &trade_volume, task, &metrics).await
-                        {
-                            error!(%error, "paper execution tick failed");
-                        }
-                    }
+                    stream::iter(tasks)
+                        .for_each_concurrent(MAX_CONCURRENT_TASKS, |task| {
+                            let database = database.clone();
+                            let gateway = gateway.clone();
+                            let trade_volume = trade_volume.clone();
+                            let order_books = order_books.clone();
+                            let metrics = metrics.clone();
+                            let instrument_gate = instrument_gate.clone();
+                            async move {
+                                let _instrument_guard =
+                                    instrument_gate.lock(task.instrument_id, &metrics).await;
+                                if let Err(error) = process_task(
+                                    &database,
+                                    &gateway,
+                                    &trade_volume,
+                                    &order_books,
+                                    task,
+                                    &metrics,
+                                )
+                                .await
+                                {
+                                    error!(%error, "paper execution tick failed");
+                                }
+                            }
+                        })
+                        .await;
                 }
                 Err(error) => error!(%error, "failed to claim paper execution tasks"),
             }
@@ -290,6 +346,7 @@ async fn process_task(
     database: &DatabasePool,
     gateway: &GatewayClient,
     trade_volume: &TradeVolumeTracker,
+    order_books: &OrderBookCache,
     task: StoredExecutionTask,
     metrics: &AppMetrics,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -306,6 +363,14 @@ async fn process_task(
     let side = parse_side(&task.side)?;
     let unit = parse_quantity_unit(&task.quantity_unit)?;
     let strategy_kind = parse_strategy(&task.strategy_kind)?;
+    order_books
+        .ensure_subscription(
+            task.instrument_id,
+            instrument.clone(),
+            gateway.clone(),
+            database.clone(),
+        )
+        .await;
     if strategy_kind == StrategyKind::Pov {
         trade_volume
             .ensure_subscription(
@@ -317,7 +382,10 @@ async fn process_task(
             .await;
     }
 
-    let order_book = match gateway.get_order_book(&instrument.id, 50).await {
+    let order_book = match order_books
+        .get(task.instrument_id, &instrument, gateway, metrics)
+        .await
+    {
         Ok(value) => value,
         Err(error) => {
             warn!(%error, task_id = %task.id, "pausing task because order book is unavailable");
@@ -326,7 +394,7 @@ async fn process_task(
         }
     };
     let age_ms = Utc::now().timestamp_millis() - order_book.gateway_received_at_ms;
-    if age_ms > 5_000 {
+    if age_ms > MAX_BOOK_AGE_MS {
         pause_task(database, &task, "order_book_stale", metrics).await?;
         return Ok(());
     }
@@ -624,6 +692,25 @@ mod tests {
     use ballast_core::{Exchange, InstrumentId, MarketKind};
 
     use super::*;
+
+    #[tokio::test]
+    async fn instrument_gate_counts_contended_waiters() {
+        let gate = InstrumentTickGate::default();
+        let metrics = AppMetrics::new().expect("metrics");
+        let instrument_id = Uuid::nil();
+        let first = gate.lock(instrument_id, &metrics).await;
+        let waiter = tokio::spawn({
+            let gate = gate.clone();
+            let metrics = metrics.clone();
+            async move {
+                let _second = gate.lock(instrument_id, &metrics).await;
+            }
+        });
+        tokio::task::yield_now().await;
+        drop(first);
+        waiter.await.expect("waiter finished");
+        assert!(metrics.instrument_tick_serialized.get() >= 1);
+    }
 
     #[test]
     fn waits_when_twap_slice_is_too_small_but_total_residual_is_executable() {

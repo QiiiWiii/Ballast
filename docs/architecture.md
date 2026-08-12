@@ -6,7 +6,7 @@
 Browser
   │ REST / WebSocket
   ▼
-nginx ──► ballast-server (Rust)
+Caddy（公网部署，可选）──► web/nginx ──► ballast-server (Rust)
              │ task state / paper IOC / event sequence
              ├────────────► PostgreSQL 17
              │ typed gRPC
@@ -52,7 +52,7 @@ React 工作台按交易生命周期组织为控制舱、执行任务、策略�
 
 ## 部署与观测
 
-Compose 只向宿主机暴露 nginx Web/API 入口。PostgreSQL 和 gRPC 只在 Compose 网络内可达。Prometheus 抓取 Rust `/metrics`，备份服务定时生成 PostgreSQL custom-format dump 并按保留天数清理。
+Compose 只向宿主机暴露 web/nginx 的 Web/API 入口。公网部署将该端口绑定到回环地址并由 Caddy 提供 HTTPS；PostgreSQL 和 gRPC 只在 Compose 网络内可达。Prometheus 抓取 Rust `/metrics`，备份服务定时生成 PostgreSQL custom-format dump 并按保留天数清理。
 
 ## 私有协议与安全锁
 

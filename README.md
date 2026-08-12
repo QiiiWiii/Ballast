@@ -15,6 +15,7 @@ Ballast 是面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易所执�
 - 执行状态机、切片与有序事件、WebSocket 断线补发
 - 运营控制舱、执行分析、市场与通道、系统状态
 - 可恢复公共历史回补与 Compose 多架构镜像部署
+- `v0.1` 正式发布轨道、版本化 Docker Hub 镜像与公开域名 paper smoke
 
 **进行中（live P0 安全门槛，v0.2+）**
 
@@ -24,7 +25,6 @@ Ballast 是面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易所执�
 
 **规划中**
 
-- v0.1 纸面正式版：收敛 CHANGELOG、发版镜像与文档对齐、书面 smoke
 - P0.4 最小 live 执行（价格保护 IOC → live TWAP）
 - P0.5 零默认风控与 kill switch、P0.6 审批与告警
 - v0.3+ 深度能力：原生算法、多账户编排、成交驱动对冲

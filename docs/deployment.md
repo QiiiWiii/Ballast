@@ -1,6 +1,6 @@
 # 部署说明
 
-首个共享环境面向单台 Linux（**amd64 或 arm64**），通过私网或 VPN 访问。Compose 只公开 nginx 的 Web/API 端口，不公开 PostgreSQL、Prometheus 或内部 gRPC。
+首个共享环境面向单台 Linux（**amd64 或 arm64**）。Compose 只公开 Web/API 端口，不公开 PostgreSQL、Prometheus 或内部 gRPC；公网域名部署应将 Web 端口绑定到回环地址，再由宿主机 Caddy 等反向代理提供 HTTPS。
 
 `deploy/compose.yaml` 只使用 Docker Hub 预构建镜像；运行机默认 `pull`，不在服务器上编译。
 
@@ -74,7 +74,7 @@ BALLAST_SMOKE_BASE_URL="${BALLAST_PUBLIC_ORIGIN}" make paper-smoke
 
 ## 服务
 
-- `web`：静态前端和 `/api` WebSocket/HTTP 反向代理。
+- `web`：nginx 静态前端和 `/api` WebSocket/HTTP 反向代理。
 - `server`：Rust API、调度 worker 和 `/metrics`。
 - `gateway`：Node/ccxt 公共行情 gRPC。
 - `postgres`：权威任务、切片和事件。

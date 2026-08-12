@@ -42,7 +42,7 @@ docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
 ```
 
-`deploy/compose.yaml` 只使用 Docker Hub 预构建多架构镜像（`amd64`/`arm64`）。`main` 推送会发布 `latest`、`main`、`sha-<short>` 等 tag；生产建议固定 `BALLAST_IMAGE_TAG=sha-...`。本地源码构建用 `compose.build.yaml`。详见 [部署说明](docs/deployment.md)。
+`deploy/compose.yaml` 只使用 Docker Hub 预构建多架构镜像（`amd64`/`arm64`）。镜像随 **`v*` 发版**发布：版本号 tag + 正式版 `latest`。本地源码构建用 `compose.build.yaml`。详见 [部署说明](docs/deployment.md)。
 
 打开 `http://localhost:8080`。先在「市场与通道」同步标的，在「策略中心」创建模板，再创建纸面任务。公共行情与纸面执行不需要交易所下单 API Key。
 

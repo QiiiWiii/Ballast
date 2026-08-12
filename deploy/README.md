@@ -12,23 +12,34 @@ CI 同时发布 **`linux/amd64` 与 `linux/arm64`** 多架构 manifest，ARM 服
 
 ## 镜像 Tag 约定
 
+镜像与 **git 发版**一起发布（推送 `v*` 标签触发 CI）。
+
 | Tag | 何时更新 | 用途 |
 |-----|----------|------|
-| `latest` | 每次 `main` 推送 | 方便跟踪主干（会变） |
-| `main` | 每次 `main` 推送 | 与分支同名的滚动标签 |
-| `sha-<7位>` | 每次构建 | **推荐生产固定**，不可变 |
-| `vX.Y.Z` / `X.Y.Z` / `X.Y` | git 打 `v*` 标签时 | 正式发版 |
+| `X.Y.Z` / `X.Y` / `vX.Y.Z` | 打 `vX.Y.Z` 发版 | 普通版本号，固定可回滚 |
+| `latest` | **仅正式发版**（`v*`）时移动 | 始终指向最新正式版 |
+| `sha-<7位>` | 每次构建 | 不可变构建 ID |
+| `main` | 仅 `workflow_dispatch` 从 main 手动构建 | 开发预览，**不带 latest** |
 
-查看某次构建打出的 tag：GitHub Actions → Docker Publish → 对应 job summary。
-
-生产示例：
+发版示例：
 
 ```bash
-# 固定到某次 commit（优先）
-BALLAST_IMAGE_TAG=sha-1a2409b
+git tag v0.1.0
+git push origin v0.1.0
+# CI 推送：sevenold/ballast-*:0.1.0 与 sevenold/ballast-*:latest 等
+```
 
-# 或跟随主干滚动
+服务器选 tag：
+
+```bash
+# 跟随最新正式版
 BALLAST_IMAGE_TAG=latest
+
+# 钉死某一正式版
+BALLAST_IMAGE_TAG=0.1.0
+
+# 钉死某次构建
+BALLAST_IMAGE_TAG=sha-1a2409b
 ```
 
 三个业务镜像共用同一个 `BALLAST_IMAGE_TAG`，保证 server/gateway/web 同源构建。
@@ -49,11 +60,9 @@ docker compose -f deploy/compose.yaml up -d
 升级：
 
 ```bash
-# 滚动 latest/main
+# 跟随最新正式版 latest，或先改 .env 里的 BALLAST_IMAGE_TAG
 docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
-
-# 或改 .env 里的 BALLAST_IMAGE_TAG 后再 pull/up
 ```
 
 ## 本地从源码构建（可选）

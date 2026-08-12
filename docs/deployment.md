@@ -32,18 +32,23 @@ docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 
 | Tag | 含义 |
 |-----|------|
-| `latest` / `main` | `main` 分支最新构建（可变） |
-| `sha-<short>` | 对应 git commit，不可变，**生产推荐** |
-| `vX.Y.Z` 等 | git 发布标签 |
+| `X.Y.Z` / `X.Y` / `vX.Y.Z` | 正式发版版本号 |
+| `latest` | 最新正式发版（仅 `v*` 时更新） |
+| `sha-<short>` | 单次构建 ID，不可变 |
+| `main` | 手动从 main 预览构建，不含 latest |
 
-CI 为每个 tag 推送 **multi-arch manifest**（`linux/amd64` + `linux/arm64`）。ARM 服务器无需额外参数，Docker 会按本机架构选择层。
+发版：
 
-三套业务镜像必须使用**同一个** `BALLAST_IMAGE_TAG`，避免混用不同提交。
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+CI 为每个 tag 推送 **multi-arch manifest**（`linux/amd64` + `linux/arm64`）。三套业务镜像必须使用**同一个** `BALLAST_IMAGE_TAG`。
 
 ## 镜像发布
 
 - 工作流：`.github/workflows/docker-publish.yml`
-- 触发：`main` 推送、`v*` 标签、`workflow_dispatch`
+- 触发：`v*` 发版标签、`workflow_dispatch`
 - Secrets：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
 
 ## 服务

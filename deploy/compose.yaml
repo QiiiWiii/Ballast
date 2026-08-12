@@ -40,7 +40,6 @@ services:
       DATABASE_URL: postgres://ballast:${POSTGRES_PASSWORD:-ballast-local-only}@postgres:5432/ballast
       RUST_LOG: ${RUST_LOG:-ballast_server=info,tower_http=info}
       BALLAST_LIVE_ENABLED: "false"
-    volumes:
     depends_on:
       postgres:
         condition: service_healthy

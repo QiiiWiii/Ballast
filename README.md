@@ -38,8 +38,11 @@ make check
 
 ```bash
 cp .env.example .env
-docker compose -f deploy/compose.yaml up --build
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d
 ```
+
+`main` 推送后 GitHub Actions 会把 `server` / `gateway` / `web` 镜像发布到 Docker Hub；服务器只需 pull。本地改源码调试可用 `docker compose -f deploy/compose.yaml up --build`。详见 [部署说明](docs/deployment.md)。
 
 打开 `http://localhost:8080`。先在「市场与通道」同步标的，在「策略中心」创建模板，再创建纸面任务。公共行情与纸面执行不需要交易所下单 API Key。
 

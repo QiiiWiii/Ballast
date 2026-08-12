@@ -18,6 +18,7 @@ services:
     networks: [ballast-private]
 
   gateway:
+    image: ${BALLAST_IMAGE_NAMESPACE:-sevenold}/ballast-gateway:${BALLAST_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/gateway.Dockerfile
@@ -30,6 +31,7 @@ services:
     networks: [ballast-private]
 
   server:
+    image: ${BALLAST_IMAGE_NAMESPACE:-sevenold}/ballast-server:${BALLAST_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
@@ -49,6 +51,7 @@ services:
     networks: [ballast-private]
 
   web:
+    image: ${BALLAST_IMAGE_NAMESPACE:-sevenold}/ballast-web:${BALLAST_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: deploy/web.Dockerfile

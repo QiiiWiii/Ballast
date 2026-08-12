@@ -2,15 +2,37 @@
 
 首个共享环境面向单台 Linux，通过私网或 VPN 访问。Compose 只公开 nginx 的 Web/API 端口，不公开 PostgreSQL、Prometheus 或内部 gRPC。
 
+业务镜像由 GitHub Actions 推送到 Docker Hub；运行机默认 pull，不在服务器上编译 Rust/Node。
+
 ## 启动
 
 ```bash
 cp .env.example .env
 # 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN
-docker compose -f deploy/compose.yaml up --build -d
+# Docker Hub 命名空间若不是默认值，设置 BALLAST_IMAGE_NAMESPACE
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d
 ```
 
 访问 `${BALLAST_PUBLIC_ORIGIN}`。网关需要能够访问五家交易所的公共 REST 和 WebSocket 域名。
+
+从当前源码本地构建（可选）：
+
+```bash
+docker compose -f deploy/compose.yaml up --build -d
+```
+
+## 镜像发布
+
+- 工作流：`.github/workflows/docker-publish.yml`
+- 触发：`main` 推送、`v*` 标签、`workflow_dispatch`
+- Secrets：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
+- 镜像：
+  - `{user}/ballast-server`
+  - `{user}/ballast-gateway`
+  - `{user}/ballast-web`
+- 标签：`latest`（main）、分支名、semver、短 SHA
+- 平台：`linux/amd64`
 
 ## 服务
 

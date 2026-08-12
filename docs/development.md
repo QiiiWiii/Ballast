@@ -32,6 +32,15 @@ docker compose -f deploy/compose.yaml config
 
 ## 启动
 
+优先 pull CI 发布的镜像：
+
+```bash
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d
+```
+
+从当前工作区源码构建：
+
 ```bash
 docker compose -f deploy/compose.yaml up --build
 ```

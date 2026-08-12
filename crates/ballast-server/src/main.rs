@@ -20,6 +20,7 @@ mod auth;
 mod execution_worker;
 mod metrics;
 mod order_book_cache;
+mod order_reconciliation_worker;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -68,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         order_books,
         metrics.clone(),
     );
+    order_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
 
     let cors_origin = std::env::var("BALLAST_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_owned())

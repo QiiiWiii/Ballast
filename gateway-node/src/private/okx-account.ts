@@ -15,6 +15,7 @@ import { Exchange } from "../generated/ballast/gateway/v1/Exchange.js";
 import { AccountEnvironment } from "../generated/ballast/gateway/v1/AccountEnvironment.js";
 import type { AccountRef } from "../generated/ballast/gateway/v1/AccountRef.js";
 import type { AccountSnapshot } from "../generated/ballast/gateway/v1/AccountSnapshot.js";
+import type { OrderSnapshot } from "../generated/ballast/gateway/v1/OrderSnapshot.js";
 import type { PrivateAccountConfig } from "./accounts.js";
 
 type CcxtConstructor = new (config?: Record<string, unknown>) => CcxtExchange;
@@ -77,6 +78,22 @@ export class OkxAccountAdapter {
       ).toString(),
       gatewayReceivedAtMs: receivedAt.toString(),
     };
+  }
+
+  async getOrderByClientId(
+    symbol: string,
+    marketKind: MarketKind,
+    clientOrderId: string,
+  ): Promise<OrderSnapshot> {
+    if (this.#client.has.fetchOrder !== true) throw new Error("fetch_order_not_supported");
+    await this.#client.loadMarkets();
+    const market = requiredMarket(this.#client, symbol);
+    if (orderMarketKind(market) !== marketKind) throw new Error("private_order_instrument_mismatch");
+    const order = await this.#client.fetchOrder(clientOrderId, symbol, { clientOrderId });
+    if (order.symbol !== symbol || order.clientOrderId !== clientOrderId) {
+      throw new Error("private_order_response_mismatch");
+    }
+    return normalizeOrder(this.#account, this.#client, order, Date.now());
   }
 
   async close(): Promise<void> {
@@ -165,7 +182,7 @@ export function normalizeOrder(
     },
     clientOrderId: requiredText(order.clientOrderId, "order.client_order_id"),
     exchangeOrderId: requiredText(order.id, "order.exchange_order_id"),
-    state: filled.isZero() ? OrderState.ORDER_STATE_OPEN : OrderState.ORDER_STATE_PARTIALLY_FILLED,
+    state: normalizeOrderState(order, filled),
     side: order.side === "buy" ? Side.SIDE_BUY : Side.SIDE_SELL,
     quantity: decimalText(order.amount, "order.amount"),
     filledQuantity: filled.toFixed(),
@@ -173,6 +190,31 @@ export function normalizeOrder(
     exchangeTimeMs: requiredTimestamp(order.lastUpdateTimestamp ?? order.timestamp, "order.timestamp").toString(),
     gatewayReceivedAtMs: receivedAt.toString(),
   }) as NonNullable<AccountSnapshot["openOrders"]>[number];
+}
+
+function normalizeOrderState(order: CcxtOrder, filled: Decimal): OrderState {
+  const rawState = isRecord(order.info) && typeof order.info.state === "string"
+    ? order.info.state
+    : undefined;
+  if (rawState !== undefined) {
+    if (rawState === "order_failed") return OrderState.ORDER_STATE_REJECTED;
+    if (rawState === "expired") return OrderState.ORDER_STATE_EXPIRED;
+    if (rawState === "partially_filled") return OrderState.ORDER_STATE_PARTIALLY_FILLED;
+    if (rawState === "filled") return OrderState.ORDER_STATE_FILLED;
+    if (rawState === "canceled") return OrderState.ORDER_STATE_CANCELLED;
+    if (rawState === "live") {
+      return filled.isZero() ? OrderState.ORDER_STATE_OPEN : OrderState.ORDER_STATE_PARTIALLY_FILLED;
+    }
+    throw new Error("order.status_invalid");
+  }
+  if (order.status === "open") {
+    return filled.isZero() ? OrderState.ORDER_STATE_OPEN : OrderState.ORDER_STATE_PARTIALLY_FILLED;
+  }
+  if (order.status === "closed") return OrderState.ORDER_STATE_FILLED;
+  if (order.status === "canceled") return OrderState.ORDER_STATE_CANCELLED;
+  if (order.status === "rejected") return OrderState.ORDER_STATE_REJECTED;
+  if (order.status === "expired") return OrderState.ORDER_STATE_EXPIRED;
+  throw new Error("order.status_invalid");
 }
 
 function accountRef(account: PrivateAccountConfig): AccountRef {

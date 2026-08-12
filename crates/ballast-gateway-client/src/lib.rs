@@ -3,6 +3,8 @@
 use std::str::FromStr;
 
 use ballast_core::{ContractKind, Exchange, Instrument, InstrumentId, MarketKind, Side};
+use ballast_execution::{OrderSnapshot as ExecutionOrderSnapshot, OrderState};
+use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
 use thiserror::Error;
 use tonic::{Status, transport::Channel};
@@ -300,6 +302,32 @@ pub fn trade_from_proto(value: proto::Trade) -> Result<Trade, GatewayClientError
     })
 }
 
+pub fn execution_order_snapshot_from_proto(
+    value: proto::OrderSnapshot,
+) -> Result<ExecutionOrderSnapshot, GatewayClientError> {
+    let exchange_order_id = optional_text(value.exchange_order_id);
+    let filled_quantity =
+        parse_non_negative_decimal(&value.filled_quantity, "order_snapshot.filled_quantity")?;
+    let average_price = parse_optional_positive_decimal(
+        value.average_price.as_deref(),
+        "order_snapshot.average_price",
+    )?;
+    let observed_at = Utc
+        .timestamp_millis_opt(value.gateway_received_at_ms)
+        .single()
+        .ok_or(GatewayClientError::InvalidField(
+            "order_snapshot.gateway_received_at_ms",
+        ))?;
+    Ok(ExecutionOrderSnapshot {
+        client_order_id: required_text(value.client_order_id, "order_snapshot.client_order_id")?,
+        exchange_order_id,
+        state: order_state_from_proto(value.state)?,
+        filled_quantity,
+        average_price,
+        observed_at,
+    })
+}
+
 fn instrument_from_proto(value: proto::Instrument) -> Result<Instrument, GatewayClientError> {
     let id = instrument_id_from_proto(required(value.key, "instrument.key")?)?;
     let contract_kind = match id.market_kind {
@@ -429,9 +457,36 @@ fn side_from_proto(value: i32) -> Result<Side, GatewayClientError> {
     }
 }
 
+fn order_state_from_proto(value: i32) -> Result<OrderState, GatewayClientError> {
+    match proto::OrderState::try_from(value).ok() {
+        Some(proto::OrderState::SubmissionPending) => Ok(OrderState::SubmissionPending),
+        Some(proto::OrderState::SubmissionUnknown) => Ok(OrderState::SubmissionUnknown),
+        Some(proto::OrderState::Open) => Ok(OrderState::Open),
+        Some(proto::OrderState::PartiallyFilled) => Ok(OrderState::PartiallyFilled),
+        Some(proto::OrderState::Filled) => Ok(OrderState::Filled),
+        Some(proto::OrderState::CancelPending) => Ok(OrderState::CancelPending),
+        Some(proto::OrderState::Cancelled) => Ok(OrderState::Cancelled),
+        Some(proto::OrderState::Rejected) => Ok(OrderState::Rejected),
+        Some(proto::OrderState::Expired) => Ok(OrderState::Expired),
+        Some(proto::OrderState::Failed) => Ok(OrderState::Failed),
+        _ => Err(GatewayClientError::InvalidField("order_snapshot.state")),
+    }
+}
+
 fn parse_positive_decimal(value: &str, field: &'static str) -> Result<Decimal, GatewayClientError> {
     let value = parse_decimal(value, field)?;
     if value <= Decimal::ZERO {
+        return Err(GatewayClientError::InvalidField(field));
+    }
+    Ok(value)
+}
+
+fn parse_non_negative_decimal(
+    value: &str,
+    field: &'static str,
+) -> Result<Decimal, GatewayClientError> {
+    let value = parse_decimal(value, field)?;
+    if value < Decimal::ZERO {
         return Err(GatewayClientError::InvalidField(field));
     }
     Ok(value)
@@ -528,5 +583,35 @@ mod tests {
             result,
             Err(GatewayClientError::InvalidField("instrument.contract_kind"))
         ));
+    }
+
+    #[test]
+    fn converts_order_snapshot_without_binary_floats() {
+        let snapshot = execution_order_snapshot_from_proto(proto::OrderSnapshot {
+            account: None,
+            instrument: None,
+            client_order_id: "b100000000000000000000000000000".to_owned(),
+            exchange_order_id: Some("exchange-order-1".to_owned()),
+            state: proto::OrderState::PartiallyFilled as i32,
+            side: proto::Side::Buy as i32,
+            quantity: "1".to_owned(),
+            filled_quantity: "0.123456789123456789".to_owned(),
+            average_price: Some("60000.123456789123456789".to_owned()),
+            reason_code: None,
+            exchange_time_ms: 1_700_000_000_000,
+            gateway_received_at_ms: 1_700_000_000_100,
+        })
+        .unwrap();
+
+        assert_eq!(snapshot.state, OrderState::PartiallyFilled);
+        assert_eq!(
+            snapshot.filled_quantity,
+            Decimal::from_str("0.123456789123456789").unwrap()
+        );
+        assert_eq!(
+            snapshot.average_price,
+            Some(Decimal::from_str("60000.123456789123456789").unwrap())
+        );
+        assert_eq!(snapshot.observed_at.timestamp_millis(), 1_700_000_000_100);
     }
 }

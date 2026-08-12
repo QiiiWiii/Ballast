@@ -162,13 +162,7 @@ export async function startGrpcServer(
     GetAccountSnapshot: asyncUnary((request) => privateAccountService.getSnapshot(request), logger),
     WatchAccountEvents: disabledStream,
   };
-  const tradingHandlers: TradingServiceHandlers = {
-    GetTradingCapabilities: asyncUnary(async (request) => tradingCapabilities(request), logger),
-    PlaceIocOrder: disabledUnary,
-    GetOrderByClientId: disabledUnary,
-    CancelOrder: disabledUnary,
-    WatchOrderEvents: disabledStream,
-  };
+  const tradingHandlers = createTradingHandlers(privateAccountService, logger);
   const algorithmicTradingHandlers: AlgorithmicTradingServiceHandlers = {
     GetAlgoCapabilities: asyncUnary(async (request) => algoCapabilities(request), logger),
     SubmitAlgoOrder: disabledUnary,
@@ -188,6 +182,19 @@ export async function startGrpcServer(
     closeAdapters: async () => {
       await Promise.all([registry.close(), privateAccountService.close()]);
     },
+  };
+}
+
+export function createTradingHandlers(
+  privateAccountService: Pick<PrivateAccountService, "getOrderByClientId">,
+  logger: Logger,
+): TradingServiceHandlers {
+  return {
+    GetTradingCapabilities: asyncUnary(async (request) => tradingCapabilities(request), logger),
+    PlaceIocOrder: disabledUnary,
+    GetOrderByClientId: asyncUnary((request) => privateAccountService.getOrderByClientId(request), logger),
+    CancelOrder: disabledUnary,
+    WatchOrderEvents: disabledStream,
   };
 }
 
@@ -232,7 +239,7 @@ export function tradingCapabilities(
   return {
     exchange: exchangeToProto(exchange),
     placeIoc: false,
-    queryByClientOrderId: false,
+    queryByClientOrderId: exchange === "okx",
     cancelOrder: false,
     privateOrderStream: false,
     privateFillStream: false,

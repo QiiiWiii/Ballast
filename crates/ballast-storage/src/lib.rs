@@ -5,6 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 mod historical_repository;
 mod instrument_repository;
 mod live_repository;
+mod order_repository;
 mod strategy_repository;
 mod task_repository;
 
@@ -22,6 +23,13 @@ pub use live_repository::{
     StoredAccount, StoredRiskDecision, StoredTaskApproval, StoredWsTicket, approve_task,
     consume_ws_ticket, create_ws_ticket, list_accounts, list_risk_decisions, list_task_approvals,
     reject_task,
+};
+pub use order_repository::{
+    ChildOrderStateUpdate, ClaimedChildOrderReconciliation, NewChildOrder, StoredChildOrder,
+    claim_child_orders_for_reconciliation, compare_and_set_child_order_state,
+    complete_child_order_reconciliation, create_or_get_child_order,
+    fail_child_order_reconciliation, get_child_order_by_client_order_id,
+    suspend_child_order_reconciliation,
 };
 pub use strategy_repository::{
     NewStrategyTemplate, NewStrategyTemplateVersion, StoredStrategyTemplate,

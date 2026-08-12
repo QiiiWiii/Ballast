@@ -80,6 +80,8 @@
 
 #### P0.3 对账与不确定订单
 
+状态：进行中（Rust 订单状态机、稳定 `client_order_id`、原子持久化、OKX 查询适配器和周期对账 worker 已进入实现；账户级 open-order 差异与告警待接）
+
 - 稳定 `client_order_id` 生成与持久化
 - 下单超时 / 网络中断 → `submission_unknown`，禁止盲目重试
 - 查询适配器：按 client id / exchange id 收敛到终态或可审计挂起

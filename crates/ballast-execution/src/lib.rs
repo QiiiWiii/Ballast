@@ -7,7 +7,12 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use uuid::Uuid;
+mod order;
+
+pub use order::{
+    ExecutionPort, OrderLifecycle, OrderSnapshot, OrderState, OrderStateParseError,
+    OrderTransitionError, SubmitOrder, stable_client_order_id,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -150,57 +155,6 @@ pub trait MarketDataPort: Send + Sync {
         instrument: &InstrumentId,
         since: DateTime<Utc>,
     ) -> Result<Decimal, PortError>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OrderState {
-    SubmissionPending,
-    SubmissionUnknown,
-    Open,
-    PartiallyFilled,
-    Filled,
-    CancelPending,
-    Cancelled,
-    Rejected,
-    Expired,
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubmitOrder {
-    pub task_id: Uuid,
-    pub account_id: String,
-    pub instrument: InstrumentId,
-    pub client_order_id: String,
-    pub side: Side,
-    pub quantity: Decimal,
-    pub limit_price: Decimal,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrderSnapshot {
-    pub client_order_id: String,
-    pub exchange_order_id: Option<String>,
-    pub state: OrderState,
-    pub filled_quantity: Decimal,
-    pub average_price: Option<Decimal>,
-    pub observed_at: DateTime<Utc>,
-}
-
-#[async_trait]
-pub trait ExecutionPort: Send + Sync {
-    async fn submit_ioc(&self, command: SubmitOrder) -> Result<OrderSnapshot, PortError>;
-    async fn cancel(
-        &self,
-        account_id: &str,
-        client_order_id: &str,
-    ) -> Result<OrderSnapshot, PortError>;
-    async fn reconcile(
-        &self,
-        account_id: &str,
-        client_order_id: &str,
-    ) -> Result<Option<OrderSnapshot>, PortError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

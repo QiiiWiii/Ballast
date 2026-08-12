@@ -10,6 +10,8 @@ build = "build.rs"
 
 [dependencies]
 ballast-core = { path = "../ballast-core" }
+ballast-execution = { path = "../ballast-execution" }
+chrono.workspace = true
 prost.workspace = true
 rust_decimal.workspace = true
 thiserror.workspace = true

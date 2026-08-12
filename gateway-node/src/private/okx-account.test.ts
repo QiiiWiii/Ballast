@@ -146,6 +146,8 @@ test("open orders preserve decimal strings and require stable identifiers", () =
     amount: "123456789.123456789123456789",
     filled: "0.000000000000000001",
     average: "60000.123456789123456789",
+    status: "open",
+    info: { state: "partially_filled" },
     timestamp: 1_700_000_000_000,
   } as unknown as CcxtOrder;
 
@@ -166,6 +168,75 @@ test("open orders preserve decimal strings and require stable identifiers", () =
   assert.throws(
     () => normalizeOrder(account, client, { ...order, clientOrderId: undefined } as CcxtOrder, 1_700_000_000_100),
     /order.client_order_id_invalid/,
+  );
+});
+
+test("order lookup uses the OKX client-order-id parameter and validates the instrument", async () => {
+  const calls: unknown[] = [];
+  const client = {
+    has: { fetchOrder: true },
+    setSandboxMode: () => undefined,
+    loadMarkets: async () => { calls.push("loadMarkets"); },
+    market: (symbol: string) => {
+      calls.push({ market: symbol });
+      return { spot: true };
+    },
+    fetchOrder: async (...args: unknown[]) => {
+      calls.push({ fetchOrder: args });
+      return {
+        id: "exchange-order-1",
+        clientOrderId: "clientOrder1",
+        symbol: "BTC/USDT",
+        side: "sell",
+        amount: "2.500000000000000001",
+        filled: "2.500000000000000001",
+        average: "60000.123456789123456789",
+        status: "closed",
+        info: { state: "filled" },
+        lastUpdateTimestamp: 1_700_000_000_001,
+      } as unknown as CcxtOrder;
+    },
+  } as unknown as CcxtExchange;
+  const adapter = new OkxAccountAdapter(account, 1_000, client);
+
+  const order = await adapter.getOrderByClientId("BTC/USDT", 1, "clientOrder1");
+
+  assert.equal(order.state, 5);
+  assert.equal(order.quantity, "2.500000000000000001");
+  assert.equal(order.filledQuantity, "2.500000000000000001");
+  assert.equal(order.averagePrice, "60000.123456789123456789");
+  assert.deepEqual(calls.slice(0, 3), [
+    "loadMarkets",
+    { market: "BTC/USDT" },
+    { fetchOrder: ["clientOrder1", "BTC/USDT", { clientOrderId: "clientOrder1" }] },
+  ]);
+});
+
+test("queried order states normalize without treating rejected orders as cancelled", () => {
+  const client = { market: () => ({ spot: true }) } as unknown as CcxtExchange;
+  const base = {
+    id: "exchange-order-1",
+    clientOrderId: "clientOrder1",
+    symbol: "BTC/USDT",
+    side: "buy",
+    amount: "10",
+    filled: "0",
+    timestamp: 1_700_000_000_000,
+  } as unknown as CcxtOrder;
+  const states = [
+    [{ status: "open", info: { state: "live" } }, 3],
+    [{ status: "open", info: { state: "partially_filled" }, filled: "1" }, 4],
+    [{ status: "closed", info: { state: "filled" }, filled: "10" }, 5],
+    [{ status: "canceled", info: { state: "canceled" } }, 7],
+    [{ status: "canceled", info: { state: "order_failed" } }, 8],
+    [{ status: "expired", info: { state: "expired" } }, 9],
+  ] as const;
+  for (const [fields, expected] of states) {
+    assert.equal(normalizeOrder(account, client, { ...base, ...fields } as CcxtOrder, 1_700_000_000_100).state, expected);
+  }
+  assert.throws(
+    () => normalizeOrder(account, client, { ...base, status: "open", info: { state: "pending" } } as CcxtOrder, 1_700_000_000_100),
+    /order.status_invalid/,
   );
 });
 

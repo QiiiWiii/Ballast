@@ -4,11 +4,21 @@ import test from "node:test";
 import { Exchange } from "./generated/ballast/gateway/v1/Exchange.js";
 import { algoCapabilities, tradingCapabilities } from "./grpc/server.js";
 
-test("private trading capabilities remain disabled until account validation", () => {
-  const capabilities = tradingCapabilities({ exchange: Exchange.EXCHANGE_BINANCE });
-  assert.equal(capabilities.placeIoc, false);
-  assert.equal(capabilities.queryByClientOrderId, false);
-  assert.equal(capabilities.privateFillStream, false);
+test("only OKX advertises query-by-client-order-id capability", () => {
+  for (const exchange of [
+    Exchange.EXCHANGE_BINANCE,
+    Exchange.EXCHANGE_OKX,
+    Exchange.EXCHANGE_BYBIT,
+    Exchange.EXCHANGE_GATE_IO,
+    Exchange.EXCHANGE_BITGET,
+  ]) {
+    const capabilities = tradingCapabilities({ exchange });
+    assert.equal(capabilities.placeIoc, false);
+    assert.equal(capabilities.queryByClientOrderId, exchange === Exchange.EXCHANGE_OKX);
+    assert.equal(capabilities.cancelOrder, false);
+    assert.equal(capabilities.privateOrderStream, false);
+    assert.equal(capabilities.privateFillStream, false);
+  }
 });
 
 test("native algo research never reports submit readiness", () => {

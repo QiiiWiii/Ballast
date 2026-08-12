@@ -224,8 +224,10 @@ dependencies = [
  "ballast-core",
  "ballast-strategies",
  "chrono",
+ "hex",
  "rust_decimal",
  "serde",
+ "sha2",
  "thiserror 2.0.19",
  "uuid",
 ]
@@ -235,6 +237,8 @@ name = "ballast-gateway-client"
 version = "0.1.0"
 dependencies = [
  "ballast-core",
+ "ballast-execution",
+ "chrono",
  "prost",
  "protoc-bin-vendored",
  "rust_decimal",
@@ -267,6 +271,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.19",
  "tokio",
+ "tonic",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -286,6 +291,7 @@ name = "ballast-storage"
 version = "0.1.0"
 dependencies = [
  "ballast-core",
+ "ballast-execution",
  "chrono",
  "rust_decimal",
  "serde",

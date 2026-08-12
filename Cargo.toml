@@ -6,8 +6,6 @@ members = [
   "crates/ballast-simulator",
   "crates/ballast-gateway-client",
   "crates/ballast-storage",
-  "crates/ballast-alpaca",
-  "crates/ballast-research",
   "crates/ballast-server",
 ]
 resolver = "2"
@@ -26,7 +24,6 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 barter-instrument = "=0.3.1"
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
 futures-util = "0.3"
 hex = "0.4"
 prost = "0.13"

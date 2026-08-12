@@ -40,11 +40,7 @@ services:
       DATABASE_URL: postgres://ballast:${POSTGRES_PASSWORD:-ballast-local-only}@postgres:5432/ballast
       RUST_LOG: ${RUST_LOG:-ballast_server=info,tower_http=info}
       BALLAST_LIVE_ENABLED: "false"
-      BALLAST_RESEARCH_DATA_DIR: /var/lib/ballast/research
-      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
-      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
     volumes:
-      - ballast-research:/var/lib/ballast/research
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,4 +94,3 @@ volumes:
   ballast-postgres:
   ballast-prometheus:
   ballast-backups:
-  ballast-research:

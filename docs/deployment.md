@@ -6,7 +6,7 @@
 
 ```bash
 cp .env.example .env
-# 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN，并为股票研究配置 Alpaca market-data key
+# 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN
 docker compose -f deploy/compose.yaml up --build -d
 ```
 
@@ -16,7 +16,6 @@ docker compose -f deploy/compose.yaml up --build -d
 
 - `web`：静态前端和 `/api` WebSocket/HTTP 反向代理。
 - `server`：Rust API、调度 worker 和 `/metrics`。
-- `server` 的 `/var/lib/ballast/research`：按交易日保存 Alpaca/IEX 压缩历史行情，使用独立持久卷。
 - `gateway`：Node/ccxt 公共行情 gRPC。
 - `postgres`：权威任务、切片和事件。
 - `prometheus`：15 天指标保留，不对宿主机暴露端口。

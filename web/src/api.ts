@@ -76,8 +76,7 @@ export const sliceSchema = z.object({
 });
 
 export const templateVersionSchema = z.object({
-  id: z.string().uuid(), template_id: z.string().uuid(), version: z.number(), strategy: z.enum(["immediate", "twap", "pov", "vwap"]),
-  algorithm_config: z.record(z.string(), z.unknown()),
+  id: z.string().uuid(), template_id: z.string().uuid(), version: z.number(), strategy: z.enum(["twap", "pov"]),
   quantity_unit: z.enum(["base_quantity", "quote_notional", "contracts"]), duration_seconds: z.number(),
   slice_interval_ms: z.number(), max_slippage_bps: z.number(), participation_rate: decimal.nullable(),
   max_slice_amount: decimal.nullable(), execution_backend: executionBackendSchema,
@@ -89,7 +88,6 @@ export const templateVersionSchema = z.object({
 
 export const templateSchema = z.object({
   id: z.string().uuid(), name: z.string(), description: z.string(), status: z.enum(["active", "archived"]),
-  scope: z.enum(["paper_execution", "research"]),
   current_version: z.number(), usage_count: z.number(), versions: z.array(templateVersionSchema),
   created_at: timestamp, updated_at: timestamp,
 });
@@ -129,71 +127,12 @@ export type StrategyTemplate = z.infer<typeof templateSchema>;
 export type StrategyTemplateVersion = z.infer<typeof templateVersionSchema>;
 export type Analytics = z.infer<typeof analyticsSchema>;
 
-export const researchCoverageSchema = z.object({
-  provider: z.literal("alpaca"), feed: z.literal("iex"), symbol: z.literal("TSLA"),
-  start: timestamp, end: timestamp, available: z.boolean(), first_bar_at: timestamp.nullable(), limitation: z.string(),
-});
 
-export const downloadJobSchema = z.object({
-  id: z.string().uuid(), provider: z.literal("alpaca"), dataset: z.literal("iex_1min_bars"), symbol: z.literal("TSLA"),
-  start_at: timestamp, end_at: timestamp, requested_sessions: z.number(),
-  status: z.enum(["queued", "downloading", "verifying", "completed", "failed", "cancelled"]),
-  downloaded_records: z.number(), verified_sessions: z.number(), error_code: z.string().nullable(),
-  created_at: timestamp, updated_at: timestamp,
-});
 
-export const validationCaseSchema = z.object({
-  id: z.string().uuid(), name: z.string(), version: z.number(), symbol: z.literal("TSLA"),
-  asset_class: z.literal("equity"), instrument_kind: z.literal("common_stock"), currency: z.literal("USD"),
-  market_data_provider: z.literal("alpaca"), market_data_dataset: z.literal("iex_1min_bars"), execution_venue: z.string().nullable(),
-  side: z.literal("sell"), target_notional_usd: decimal, timezone: z.literal("America/New_York"),
-  start_time: z.string(), end_time: z.string(), max_participation_rate: decimal,
-  warmup_sessions: z.number(), evaluation_sessions: z.number(), status: z.enum(["active", "archived"]),
-  created_at: timestamp, updated_at: timestamp,
-});
 
-const replayPointSchema = z.object({
-  bucket: z.number(), timestamp, market_price: decimal, market_volume: decimal,
-  planned_quantity: decimal, filled_quantity: decimal, cumulative_quantity: decimal,
-});
-const scenarioResultSchema = z.object({
-  scenario: z.enum(["low", "base", "high"]), average_price: decimal,
-  implementation_shortfall_bps: decimal, interval_vwap_slippage_bps: decimal,
-});
-const candidateResultSchema = z.object({
-  strategy: z.enum(["immediate", "twap", "pov", "vwap"]), completed: z.boolean(), completion_bucket: z.number().nullable(),
-  target_quantity: decimal, filled_quantity: decimal, maximum_participation_rate: decimal,
-  constraint_violations: z.array(z.string()), scenarios: z.array(scenarioResultSchema), replay: z.array(replayPointSchema),
-});
-export const validationReportSchema = z.object({
-  provider: z.literal("alpaca"), dataset: z.literal("iex_1min_bars"), data_quality: z.literal("iex_proxy"),
-  case: z.record(z.string(), z.unknown()), strategies: z.array(z.record(z.string(), z.unknown())),
-  invalid_sessions: z.record(z.string(), z.string()),
-  sessions: z.array(z.object({ date: z.string(), arrival_price: decimal, interval_vwap: decimal, candidates: z.array(candidateResultSchema) })),
-  aggregates: z.array(z.object({
-    strategy: z.enum(["immediate", "twap", "pov", "vwap"]), evaluated_sessions: z.number(), completed_sessions: z.number(),
-    violation_count: z.number(), median_shortfall_bps: decimal, p75_shortfall_bps: decimal, p95_shortfall_bps: decimal,
-    eligible_for_validation: z.boolean(),
-  })),
-});
 
-export const validationRunSchema = z.object({
-  id: z.string().uuid(), case_id: z.string().uuid(), case_snapshot: z.record(z.string(), z.unknown()),
-  strategy_version_ids: z.array(z.string().uuid()), status: z.enum(["queued", "preparing", "running", "succeeded", "failed", "cancelled"]),
-  data_quality: z.literal("iex_proxy"), report: validationReportSchema.nullable(), report_sha256: z.string().nullable(), error_code: z.string().nullable(),
-  created_at: timestamp, started_at: timestamp.nullable(), completed_at: timestamp.nullable(), updated_at: timestamp,
-});
 
-export const validationDecisionSchema = z.object({
-  sequence: z.number(), run_id: z.string().uuid(), decision: z.enum(["validated", "rejected"]), note: z.string(), created_at: timestamp,
-});
 
-export type ResearchCoverage = z.infer<typeof researchCoverageSchema>;
-export type DownloadJob = z.infer<typeof downloadJobSchema>;
-export type ValidationCase = z.infer<typeof validationCaseSchema>;
-export type ValidationRun = z.infer<typeof validationRunSchema>;
-export type ValidationReport = z.infer<typeof validationReportSchema>;
-export type ValidationDecision = z.infer<typeof validationDecisionSchema>;
 
 export interface TemplateInput {
   name?: string; description?: string; strategy: "twap" | "pov";
@@ -262,42 +201,6 @@ export const api = {
   createTemplate: async (input: TemplateInput) => templateSchema.parse(await request("/api/v1/strategy-templates", jsonRequest("POST", input))),
   createTemplateVersion: async (id: string, input: TemplateInput) => templateVersionSchema.parse(await request(`/api/v1/strategy-templates/${id}/versions`, jsonRequest("POST", input))),
   archiveTemplate: async (id: string) => templateSchema.parse(await request(`/api/v1/strategy-templates/${id}/archive`, jsonRequest("POST"))),
-  researchCoverage: async () => researchCoverageSchema.parse(await request("/api/v1/research/coverage", jsonRequest("POST", { symbol: "TSLA" }))),
-  downloadJobs: async () => z.array(downloadJobSchema).parse(await request("/api/v1/research/download-jobs")),
-  createDownloadJob: async () => downloadJobSchema.parse(await request("/api/v1/research/download-jobs", jsonRequest("POST", { symbol: "TSLA", requested_sessions: 120 }))),
-  cancelDownloadJob: async (id: string) => downloadJobSchema.parse(await request(`/api/v1/research/download-jobs/${id}/cancel`, jsonRequest("POST"))),
-  validationCases: async () => z.array(validationCaseSchema).parse(await request("/api/v1/validation-cases")),
-  validationCase: async (id: string) => validationCaseSchema.parse(await request(`/api/v1/validation-cases/${id}`)),
-  updateValidationCase: async (id: string, input: { name: string; target_notional_usd: string; max_participation_rate: string; evaluation_sessions: number }) => validationCaseSchema.parse(await request(`/api/v1/validation-cases/${id}`, jsonRequest("PATCH", input))),
-  validationRuns: async () => z.array(validationRunSchema).parse(await request("/api/v1/validation-runs")),
-  createValidationRun: async (caseId: string, strategyVersionIds: string[]) => validationRunSchema.parse(await request("/api/v1/validation-runs", jsonRequest("POST", { case_id: caseId, strategy_version_ids: strategyVersionIds }))),
-  validationRun: async (id: string) => validationRunSchema.parse(await request(`/api/v1/validation-runs/${id}`)),
-  validationReport: async (id: string) => validationReportSchema.parse(await request(`/api/v1/validation-runs/${id}/report`)),
-  cancelValidationRun: async (id: string) => validationRunSchema.parse(await request(`/api/v1/validation-runs/${id}/cancel`, jsonRequest("POST"))),
-  validationDecisions: async (id: string) => z.array(validationDecisionSchema).parse(await request(`/api/v1/validation-runs/${id}/decisions`)),
-  createValidationDecision: async (id: string, decision: "validated" | "rejected", note = "") => validationDecisionSchema.parse(await request(`/api/v1/validation-runs/${id}/decisions`, jsonRequest("POST", { decision, note }))),
-  compareValidationRuns: async (ids: string[]) => z.object({
-    items: z.array(z.object({
-      run: validationRunSchema,
-      latest_decision: validationDecisionSchema.nullish(),
-      aggregates: z.array(z.object({
-        strategy: z.enum(["immediate", "twap", "pov", "vwap"]),
-        evaluated_sessions: z.number(),
-        completed_sessions: z.number(),
-        violation_count: z.number(),
-        median_shortfall_bps: decimal,
-        p75_shortfall_bps: decimal,
-        p95_shortfall_bps: decimal,
-        eligible_for_validation: z.boolean(),
-      })),
-      case_summary: z.record(z.string(), z.unknown()),
-    })),
-  }).parse(await request(`/api/v1/validation-runs/compare?ids=${ids.map(encodeURIComponent).join(",")}`)),
-  exportValidationRunUrl: (id: string, format: "json" | "csv", view?: "aggregates" | "sessions") => {
-    const params = new URLSearchParams({ format });
-    if (format === "csv" && view) params.set("view", view);
-    return `/api/v1/validation-runs/${id}/export?${params}`;
-  },
   analytics: async (query = "window=24h") => analyticsSchema.parse(await request(`/api/v1/analytics/executions?${query}`)),
   dashboard: async () => dashboardSchema.parse(await request("/api/v1/dashboard/operations?window=24h")),
   health: async () => z.object({ status: z.string(), service: z.string(), version: z.string() }).parse(await request("/health")),

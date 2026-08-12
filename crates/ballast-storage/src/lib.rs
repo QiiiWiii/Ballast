@@ -5,7 +5,6 @@ use sqlx::postgres::PgPoolOptions;
 mod historical_repository;
 mod instrument_repository;
 mod live_repository;
-mod research_repository;
 mod strategy_repository;
 mod task_repository;
 
@@ -22,15 +21,6 @@ pub use instrument_repository::{
 pub use live_repository::{
     StoredAccount, StoredRiskDecision, StoredTaskApproval, approve_task, list_accounts,
     list_risk_decisions, list_task_approvals, reject_task,
-};
-pub use research_repository::{
-    NewDailyManifest, NewDownloadJob, StoredDailyManifest, StoredDownloadJob, StoredValidationCase,
-    StoredValidationDecision, StoredValidationRun, ValidationCaseUpdate,
-    append_validation_decision, create_download_job, create_validation_run, get_download_job,
-    get_validation_case, get_validation_run, get_validation_runs_by_ids, latest_validation_decisions,
-    list_daily_manifests, list_download_jobs, list_validation_cases, list_validation_decisions,
-    list_validation_runs, replace_session_results, set_download_job_state, set_validation_run_state,
-    update_validation_case, upsert_daily_manifests,
 };
 pub use strategy_repository::{
     NewStrategyTemplate, NewStrategyTemplateVersion, StoredStrategyTemplate,

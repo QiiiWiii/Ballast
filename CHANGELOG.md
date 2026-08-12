@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Removed
+
+- 移除 Alpaca/IEX 股票研究实验台、相关 crate、API、迁移与前端页面。
+
+
 ### Changed
 
 - 以 Apache License 2.0 明确开源许可证，并完善 CONTRIBUTING / SECURITY / CODE_OF_CONDUCT。
@@ -28,11 +33,8 @@
 - 增加审批、账户对账、风险和对冲锁舱页面；未配置私有能力时不展示伪数据或生产控件。
 - 增加 Binance/OKX 原生算法研究能力接口，Bybit/Gate/Bitget 保持显式待调研状态。
 - 增加五家公共标的同步的部分成功结果和交易所健康状态持久化。
-- 增加 `ballast-research` 确定性股票回放引擎，覆盖 Immediate、5 分钟 TWAP、10% POV 和 20 日 walk-forward VWAP。
-- 增加 `ballast-alpaca`，通过免费 Alpaca Basic/IEX 下载 TSLA 分钟行情，按交易日校验、压缩、哈希并缓存。
 - 增加策略中心 Library/Cases/Data/Experiments 四分区、市场回放带、策略比较 ledger 和人工验证决定。
 - 增加验证 run 多 run 对比、JSON/CSV 导出、案例 evaluation_sessions 可配（1–200）与 run 级 case_snapshot 回放。
-- 增加研究数据任务、验证案例、运行、逐日结果、报告与 append-only 决策的 `0006` 数据库迁移和 API。
 
 ### Changed
 

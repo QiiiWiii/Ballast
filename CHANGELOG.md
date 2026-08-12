@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 增加路线图：纸面 v0.1、live P0 安全门槛与非目标。
+
 ### Removed
 
 - 移除 Alpaca/IEX 股票研究实验台、相关 crate、API、迁移与前端页面。

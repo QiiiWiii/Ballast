@@ -62,6 +62,7 @@ docker compose -f deploy/compose.yaml up -d
 - 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - 安全政策：[SECURITY.md](SECURITY.md)
 - 开源准备核对：[docs/open-source-readiness.md](docs/open-source-readiness.md)
+- 路线图：[docs/roadmap.md](docs/roadmap.md)
 - 第三方许可证摘要：[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 
 ## License

@@ -70,3 +70,5 @@ Compose 只向宿主机暴露 nginx Web/API 入口。PostgreSQL 和 gRPC 只在 
 - 成交驱动双腿对冲和裸露时间熔断
 
 真实下单不得在这些边界完成前启用。
+
+优先级、验收门槛与非目标见 [路线图](roadmap.md)。

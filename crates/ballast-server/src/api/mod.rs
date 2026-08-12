@@ -81,5 +81,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/risk", get(live::private_plane_locked))
         .route("/api/v1/hedges", get(live::private_plane_locked))
         .route("/api/v1/events", get(events::list_events))
+        .route("/api/v1/ws-tickets", post(crate::auth::issue_ws_ticket))
         .route("/api/v1/ws", get(events::websocket))
 }

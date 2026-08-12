@@ -26,6 +26,7 @@ barter-instrument = "=0.3.1"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 hex = "0.4"
+jsonwebtoken = "9"
 prost = "0.13"
 prometheus = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

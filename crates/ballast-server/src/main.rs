@@ -16,6 +16,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod api;
+mod auth;
 mod execution_worker;
 mod metrics;
 mod order_book_cache;
@@ -32,6 +33,7 @@ pub(crate) struct AppState {
     database: DatabasePool,
     gateway: GatewayClient,
     metrics: metrics::AppMetrics,
+    auth: auth::AuthState,
 }
 
 #[tokio::main]
@@ -56,6 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "http://127.0.0.1:50051".to_owned());
     let gateway = GatewayClient::connect(gateway_endpoint).await?;
     let metrics = metrics::AppMetrics::new()?;
+    let auth = auth::AuthState::from_env(database.clone())?;
     let trade_volume = execution_worker::TradeVolumeTracker::default();
     let order_books = order_book_cache::OrderBookCache::default();
     execution_worker::spawn_worker(
@@ -74,20 +77,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([
             header::CONTENT_TYPE,
+            header::AUTHORIZATION,
             HeaderName::from_static("idempotency-key"),
         ]);
 
+    let app_state = AppState {
+        database,
+        gateway,
+        metrics,
+        auth,
+    };
     let app = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics::endpoint))
         .merge(api::routes())
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(AppState {
-            database,
-            gateway,
-            metrics,
-        });
+        .with_state(app_state);
     let listener = tokio::net::TcpListener::bind(bind).await?;
 
     info!(%bind, "ballast server listening");

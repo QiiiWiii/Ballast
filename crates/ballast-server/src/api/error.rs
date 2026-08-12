@@ -47,6 +47,27 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn unauthorized(code: &'static str) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code,
+            params: json!({}),
+        }
+    }
+
+    pub(crate) fn forbidden(code: &'static str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            params: json!({}),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn code(&self) -> &'static str {
+        self.code
+    }
+
     pub(crate) fn database(error: sqlx::Error) -> Self {
         tracing::error!(%error, "database operation failed");
         Self {

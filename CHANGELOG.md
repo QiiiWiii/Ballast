@@ -7,6 +7,7 @@
 ### Added
 
 - 增加路线图：纸面 v0.1、live P0 安全门槛与非目标。
+- 增加可选 OIDC 鉴权：JWKS 验签、viewer/operator/admin 角色、写路径保护与单次 WS ticket。
 
 ### Removed
 

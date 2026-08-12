@@ -62,11 +62,11 @@ pub(super) async fn native_algorithm_capabilities(
     Ok(Json(result))
 }
 
-pub(super) async fn live_readiness() -> Json<Value> {
+pub(super) async fn live_readiness(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "enabled": false,
         "private_services": "disabled",
-        "oidc": "not_configured",
+        "oidc": state.auth.readiness_status(),
         "limits": "zero_default",
         "required": [
             "oidc_validation",

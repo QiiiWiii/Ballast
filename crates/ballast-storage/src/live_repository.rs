@@ -204,3 +204,71 @@ fn row_to_risk_decision(row: &sqlx::postgres::PgRow) -> Result<StoredRiskDecisio
         created_at: row.try_get("created_at")?,
     })
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredWsTicket {
+    pub subject: String,
+    pub roles: Vec<String>,
+    pub expires_at: DateTime<Utc>,
+}
+
+pub async fn create_ws_ticket(
+    pool: &DatabasePool,
+    ticket_hash: &str,
+    subject: &str,
+    roles: &[String],
+    expires_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    let roles_json =
+        serde_json::to_value(roles).map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    sqlx::query(
+        r#"
+        INSERT INTO ws_tickets (ticket_hash, subject, roles, expires_at)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(ticket_hash)
+    .bind(subject)
+    .bind(roles_json)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Atomically consume a non-expired ticket. Returns None if missing, expired, or already used.
+pub async fn consume_ws_ticket(
+    pool: &DatabasePool,
+    ticket_hash: &str,
+) -> Result<Option<StoredWsTicket>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        UPDATE ws_tickets
+        SET consumed_at = now()
+        WHERE ticket_hash = $1
+          AND consumed_at IS NULL
+          AND expires_at > now()
+        RETURNING subject, roles, expires_at
+        "#,
+    )
+    .bind(ticket_hash)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let roles_value: Value = row.try_get("roles")?;
+    let roles = match roles_value {
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        Value::String(text) => vec![text],
+        _ => Vec::new(),
+    };
+    Ok(Some(StoredWsTicket {
+        subject: row.try_get("subject")?,
+        roles,
+        expires_at: row.try_get("expires_at")?,
+    }))
+}

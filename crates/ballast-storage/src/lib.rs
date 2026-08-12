@@ -19,8 +19,9 @@ pub use instrument_repository::{
     list_instruments_page, upsert_instruments,
 };
 pub use live_repository::{
-    StoredAccount, StoredRiskDecision, StoredTaskApproval, approve_task, list_accounts,
-    list_risk_decisions, list_task_approvals, reject_task,
+    StoredAccount, StoredRiskDecision, StoredTaskApproval, StoredWsTicket, approve_task,
+    consume_ws_ticket, create_ws_ticket, list_accounts, list_risk_decisions, list_task_approvals,
+    reject_task,
 };
 pub use strategy_repository::{
     NewStrategyTemplate, NewStrategyTemplateVersion, StoredStrategyTemplate,

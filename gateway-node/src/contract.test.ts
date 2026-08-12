@@ -4,7 +4,7 @@ import ccxt from "ccxt";
 import type { Exchange as CcxtExchange, MarketInterface as CcxtMarket } from "ccxt";
 
 import type { ExchangeId } from "./exchanges/adapter.js";
-import { nextHistoricalCursor, normalizeHistoricalCandle, normalizeHistoricalTrade, normalizeInstrument, normalizeInstruments, normalizeOrderBook, normalizeTrade, withReadRetry } from "./exchanges/ccxt-adapter.js";
+import { nextHistoricalCursor, normalizeHistoricalCandle, normalizeHistoricalTrade, normalizeInstrument, normalizeInstruments, normalizeOrderBook, normalizeTrade, watchOrderBookArguments, withReadRetry } from "./exchanges/ccxt-adapter.js";
 
 const exchanges: readonly ExchangeId[] = ["binance", "okx", "bybit", "gate_io", "bitget"];
 const decimalPlacesClient = { precisionMode: ccxt.DECIMAL_PLACES } as CcxtExchange;
@@ -31,6 +31,12 @@ test("fixture order book preserves sequence and depth", () => {
   } as never, 1);
   assert.deepEqual(book.bids, [{ price: "100", quantity: "2" }]);
   assert.equal(book.sequence, "42");
+});
+
+test("OKX 50-level streams use the public books channel", () => {
+  assert.deepEqual(watchOrderBookArguments("okx", 50), [undefined, { depth: "books" }]);
+  assert.deepEqual(watchOrderBookArguments("binance", 50), [50, {}]);
+  assert.deepEqual(watchOrderBookArguments("okx", 5), [5, {}]);
 });
 
 test("fixture trades have stable exchange-scoped event ids", () => {

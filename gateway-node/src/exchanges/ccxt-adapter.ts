@@ -149,7 +149,8 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
 
   async watchOrderBook(instrument: InstrumentKey, depth: number): Promise<OrderBook> {
     await this.#stream.loadMarkets();
-    const book = await this.#stream.watchOrderBook(instrument.symbol, depth);
+    const [limit, params] = watchOrderBookArguments(this.exchange, depth);
+    const book = await this.#stream.watchOrderBook(instrument.symbol, limit, params);
     return normalizeOrderBook(instrument, book, depth);
   }
 
@@ -163,6 +164,16 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
     await Promise.allSettled([this.#rest.close(), this.#stream.close()]);
   }
 
+}
+
+export function watchOrderBookArguments(
+  exchange: ExchangeId,
+  depth: number,
+): readonly [number | undefined, Record<string, unknown>] {
+  if (exchange === "okx" && depth === 50) {
+    return [undefined, { depth: "books" }];
+  }
+  return [depth, {}];
 }
 
 export function normalizeInstruments(

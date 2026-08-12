@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-12
+
+### Fixed
+
+- OKX 的 50 档 WebSocket 订单簿订阅固定使用无需身份认证的公开 `books` 通道，并在网关内裁剪到请求深度，避免无 API Key 的 paper 部署持续触发认证错误。
+- Gateway 健康响应从发布包元数据读取版本，生产镜像不再因缺少 npm 启动环境变量而报告旧版本。
+
 ## [0.1.0] - 2026-08-12
 
 ### Added
@@ -35,5 +42,6 @@
 - WebSocket 首连与重连使用确认游标，前端批量合并补发事件。
 - 交易所详情、系统状态和控制舱使用持久化健康快照，避免在页面刷新时级联触发公网探测。
 
-[Unreleased]: https://github.com/QiiiWiii/Ballast/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/QiiiWiii/Ballast/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/QiiiWiii/Ballast/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/QiiiWiii/Ballast/releases/tag/v0.1.0

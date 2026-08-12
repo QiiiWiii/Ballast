@@ -5,7 +5,20 @@ import pino from "pino";
 
 import type { GetOrderByClientIdRequest__Output } from "../generated/ballast/gateway/v1/GetOrderByClientIdRequest.js";
 import type { OrderSnapshot } from "../generated/ballast/gateway/v1/OrderSnapshot.js";
-import { createTradingHandlers } from "./server.js";
+import { AdapterRegistry } from "../exchanges/registry.js";
+import { createTradingHandlers, healthResponse } from "./server.js";
+
+test("health reports the packaged gateway version without npm environment variables", () => {
+  const previous = process.env.npm_package_version;
+  delete process.env.npm_package_version;
+  try {
+    const response = healthResponse(new AdapterRegistry(1_000, pino({ enabled: false })));
+    assert.equal(response.serviceVersion, "0.1.1");
+  } finally {
+    if (previous === undefined) delete process.env.npm_package_version;
+    else process.env.npm_package_version = previous;
+  }
+});
 
 test("trading server routes GetOrderByClientId while keeping mutations disabled", async () => {
   const expected = { clientOrderId: "clientOrder1" } as OrderSnapshot;

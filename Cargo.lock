@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barter-instrument",
  "rust_decimal",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-execution"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "ballast-core",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-gateway-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ballast-core",
  "ballast-execution",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum 0.8.9",
  "ballast-core",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-simulator"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ballast-core",
  "rust_decimal",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ballast-core",
  "ballast-execution",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "ballast-strategies"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rust_decimal",
  "thiserror 2.0.19",

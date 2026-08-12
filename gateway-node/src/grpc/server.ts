@@ -1,4 +1,5 @@
 import * as grpc from "@grpc/grpc-js";
+import gatewayPackage from "../../package.json" with { type: "json" };
 import type { Logger } from "pino";
 
 import type { GatewayConfig } from "../config.js";
@@ -414,7 +415,7 @@ async function runStream<TDomain, TEvent>(
   }
 }
 
-function healthResponse(registry: AdapterRegistry): HealthResponse {
+export function healthResponse(registry: AdapterRegistry): HealthResponse {
   const adapters = registry.statuses().map((status) => compactOptional({
     exchange: exchangeToProto(status.exchange),
     status: status.status,
@@ -424,7 +425,7 @@ function healthResponse(registry: AdapterRegistry): HealthResponse {
   const status = adapters.some((adapter) => adapter.status === "degraded") ? "degraded" : "ok";
   return {
     status,
-    serviceVersion: process.env.npm_package_version ?? "0.1.0",
+    serviceVersion: gatewayPackage.version,
     gatewayTimeMs: Date.now().toString(),
     adapters,
   };

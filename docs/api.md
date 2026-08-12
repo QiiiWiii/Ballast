@@ -75,7 +75,7 @@
 - `GET /api/v1/risk`
 - `GET /api/v1/hedges`
 
-配置 `BALLAST_OIDC_ISSUER` 与 `BALLAST_OIDC_AUDIENCE` 后，非公开 `/api/v1` 路由需要 `Authorization: Bearer <jwt>`。角色声明默认读取 `ballast_roles`（可用 `BALLAST_OIDC_ROLE_CLAIM` 覆盖），取值为 `viewer` / `operator` / `admin`。读接口至少 `viewer`，写接口至少 `operator`，审批/风险写路径至少 `admin`。WebSocket 不使用长期 Bearer：先 `POST /api/v1/ws-tickets` 领取单次 ticket，再连接 `/api/v1/ws?ticket=...`；ticket 消费后即失效。
+配置 `BALLAST_OIDC_ISSUER` 与 `BALLAST_OIDC_AUDIENCE` 后，非公开 `/api/v1` 路由需要 `Authorization: Bearer <jwt>`。角色声明默认读取 `ballast_roles`（可用 `BALLAST_OIDC_ROLE_CLAIM` 覆盖），取值为 `viewer` / `operator` / `admin`。读接口至少 `viewer`，写接口至少 `operator`，审批/风险写路径至少 `admin`。WebSocket 不使用长期 Bearer：先 `POST /api/v1/ws-tickets` 领取单次 ticket，再以 `Sec-WebSocket-Protocol: ballast-ticket, ballast-ticket-value.<ticket>` 连接 `/api/v1/ws`；ticket 消费后即失效，服务端只回显固定的 `ballast-ticket` 子协议。
 
 原生算法能力接口只返回经过研究的能力状态。`documented_not_validated` 不代表可提交。OIDC 和私有对账完成前，账户、审批、风险和对冲接口统一返回 HTTP 423 与 `live_execution_disabled`。
 

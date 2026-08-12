@@ -74,7 +74,9 @@ pub(super) async fn websocket(
     Query(query): Query<EventQuery>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    upgrade.on_upgrade(move |socket| stream_events(socket, state, query.after_sequence))
+    upgrade
+        .protocols([crate::auth::WS_TICKET_SUBPROTOCOL])
+        .on_upgrade(move |socket| stream_events(socket, state, query.after_sequence))
 }
 
 async fn stream_events(mut socket: WebSocket, state: AppState, after_sequence: Option<i64>) {

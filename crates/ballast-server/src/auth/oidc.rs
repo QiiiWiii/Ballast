@@ -8,7 +8,7 @@ use jsonwebtoken::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use super::{Principal, Role, role_rank};
 use crate::api::ApiError;
@@ -25,6 +25,7 @@ pub struct OidcValidatorInner {
     config: OidcConfig,
     http: reqwest::Client,
     cache: RwLock<JwksCache>,
+    refresh_lock: Mutex<()>,
     /// When true, never hit the network; only static cache entries are used.
     static_only: bool,
 }
@@ -32,9 +33,11 @@ pub struct OidcValidatorInner {
 struct JwksCache {
     keys: HashMap<String, DecodingKey>,
     fetched_at: Option<Instant>,
+    refresh_attempted_at: Option<Instant>,
 }
 
 const JWKS_TTL: Duration = Duration::from_secs(300);
+const JWKS_REFRESH_COOLDOWN: Duration = Duration::from_secs(1);
 
 pub struct OidcValidator {
     inner: Arc<OidcValidatorInner>,
@@ -58,12 +61,17 @@ impl OidcValidator {
 }
 
 impl OidcValidatorInner {
-    pub fn new(config: OidcConfig) -> Result<Self, String> {
-        if !config.issuer.starts_with("https://") && !config.issuer.starts_with("http://") {
-            return Err("BALLAST_OIDC_ISSUER must be an absolute URL".into());
+    pub fn new(mut config: OidcConfig) -> Result<Self, String> {
+        let issuer = config.issuer.trim_end_matches('/');
+        let parsed_issuer = reqwest::Url::parse(issuer)
+            .map_err(|_| "BALLAST_OIDC_ISSUER must be an absolute HTTPS URL".to_owned())?;
+        if parsed_issuer.scheme() != "https" || parsed_issuer.host_str().is_none() {
+            return Err("BALLAST_OIDC_ISSUER must be an absolute HTTPS URL".into());
         }
+        config.issuer = issuer.to_owned();
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| format!("oidc http client: {error}"))?;
         Ok(Self {
@@ -72,7 +80,9 @@ impl OidcValidatorInner {
             cache: RwLock::new(JwksCache {
                 keys: HashMap::new(),
                 fetched_at: None,
+                refresh_attempted_at: None,
             }),
+            refresh_lock: Mutex::new(()),
             static_only: false,
         })
     }
@@ -85,8 +95,25 @@ impl OidcValidatorInner {
             cache: RwLock::new(JwksCache {
                 keys,
                 fetched_at: Some(Instant::now()),
+                refresh_attempted_at: None,
             }),
+            refresh_lock: Mutex::new(()),
             static_only: true,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_cached_keys(config: OidcConfig, keys: HashMap<String, DecodingKey>) -> Self {
+        Self {
+            config,
+            http: reqwest::Client::new(),
+            cache: RwLock::new(JwksCache {
+                keys,
+                fetched_at: Some(Instant::now()),
+                refresh_attempted_at: None,
+            }),
+            refresh_lock: Mutex::new(()),
+            static_only: false,
         }
     }
 
@@ -105,7 +132,7 @@ impl OidcValidatorInner {
             _ => return Err(ApiError::unauthorized("invalid_token")),
         };
         let mut validation = Validation::new(algorithm);
-        validation.set_issuer(&[self.config.issuer.trim_end_matches('/')]);
+        validation.set_issuer(&[self.config.issuer.as_str()]);
         validation.set_audience(&[self.config.audience.as_str()]);
         validation.leeway = self.config.clock_skew_secs;
 
@@ -126,13 +153,38 @@ impl OidcValidatorInner {
     async fn decoding_key(&self, kid: &str) -> Result<DecodingKey, ApiError> {
         {
             let cache = self.cache.read().await;
+            let fresh = cache.fetched_at.is_some_and(|at| at.elapsed() < JWKS_TTL);
             if let Some(key) = cache.keys.get(kid) {
-                if self.static_only || cache.fetched_at.is_some_and(|at| at.elapsed() < JWKS_TTL) {
+                if self.static_only || fresh {
                     return Ok(key.clone());
                 }
             } else if self.static_only {
                 return Err(ApiError::unauthorized("unknown_token_kid"));
             }
+        }
+
+        // Re-check after acquiring the lock so concurrent requests share one refresh.
+        let _refresh_guard = self.refresh_lock.lock().await;
+        {
+            let cache = self.cache.read().await;
+            let fresh = cache.fetched_at.is_some_and(|at| at.elapsed() < JWKS_TTL);
+            if let Some(key) = cache.keys.get(kid) {
+                if self.static_only || fresh {
+                    return Ok(key.clone());
+                }
+            } else if self.static_only {
+                return Err(ApiError::unauthorized("unknown_token_kid"));
+            }
+            if cache
+                .refresh_attempted_at
+                .is_some_and(|at| at.elapsed() < JWKS_REFRESH_COOLDOWN)
+            {
+                return Err(ApiError::unauthorized("jwks_refresh_throttled"));
+            }
+        }
+        {
+            let mut cache = self.cache.write().await;
+            cache.refresh_attempted_at = Some(Instant::now());
         }
         self.refresh_jwks().await?;
         let cache = self.cache.read().await;
@@ -147,7 +199,7 @@ impl OidcValidatorInner {
         if self.static_only {
             return Err(ApiError::unauthorized("unknown_token_kid"));
         }
-        let issuer = self.config.issuer.trim_end_matches('/');
+        let issuer = self.config.issuer.as_str();
         let discovery_url = format!("{issuer}/.well-known/openid-configuration");
         let discovery = self
             .http
@@ -169,9 +221,14 @@ impl OidcValidatorInner {
                 tracing::error!(%error, "oidc discovery decode failed");
                 ApiError::unauthorized("oidc_discovery_failed")
             })?;
+        validate_discovery_issuer(issuer, &discovery.issuer)?;
+        let jwks_uri = reqwest::Url::parse(&discovery.jwks_uri)
+            .ok()
+            .filter(|url| url.scheme() == "https" && url.host_str().is_some())
+            .ok_or_else(|| ApiError::unauthorized("jwks_invalid"))?;
         let jwks = self
             .http
-            .get(&discovery.jwks_uri)
+            .get(jwks_uri)
             .send()
             .await
             .map_err(|error| {
@@ -221,7 +278,15 @@ impl OidcValidatorInner {
 
 #[derive(Debug, Deserialize)]
 struct DiscoveryDocument {
+    issuer: String,
     jwks_uri: String,
+}
+
+fn validate_discovery_issuer(configured: &str, discovered: &str) -> Result<(), ApiError> {
+    if discovered != configured {
+        return Err(ApiError::unauthorized("oidc_issuer_mismatch"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,18 +300,6 @@ fn extract_roles(claims: &Claims, role_claim: &str) -> Vec<Role> {
     let mut roles = Vec::new();
     if let Some(value) = claims.extra.get(role_claim) {
         push_roles_from_value(value, &mut roles);
-    }
-    if roles.is_empty() {
-        if let Some(value) = claims.extra.get("roles") {
-            push_roles_from_value(value, &mut roles);
-        }
-    }
-    if roles.is_empty() {
-        if let Some(realm) = claims.extra.get("realm_access") {
-            if let Some(value) = realm.get("roles") {
-                push_roles_from_value(value, &mut roles);
-            }
-        }
     }
     roles.sort_by_key(|role| std::cmp::Reverse(role_rank(*role)));
     roles.dedup();
@@ -291,6 +344,8 @@ mod tests {
         exp: usize,
         iat: usize,
         ballast_roles: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        roles: Option<Vec<String>>,
     }
 
     fn now() -> usize {
@@ -326,6 +381,7 @@ mod tests {
             exp: now() + 300,
             iat: now(),
             ballast_roles: roles.iter().map(|role| (*role).to_owned()).collect(),
+            roles: None,
         };
         encode(&header, &claims, &encoding).unwrap()
     }
@@ -360,5 +416,83 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "role_claim_missing");
+    }
+
+    #[tokio::test]
+    async fn rejects_roles_from_unconfigured_claim() {
+        let encoding = EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_PEM.as_bytes()).unwrap();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-key".into());
+        let claims = TestClaims {
+            sub: "user-1".into(),
+            iss: "http://issuer.test".into(),
+            aud: "ballast".into(),
+            exp: now() + 300,
+            iat: now(),
+            ballast_roles: Vec::new(),
+            roles: Some(vec!["admin".into()]),
+        };
+        let token = encode(&header, &claims, &encoding).unwrap();
+        let err = validator_with_test_key()
+            .authenticate(&token)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "role_claim_missing");
+    }
+
+    #[test]
+    fn rejects_non_https_issuer() {
+        let result = OidcValidatorInner::new(OidcConfig {
+            issuer: "http://issuer.test".into(),
+            audience: "ballast".into(),
+            role_claim: "ballast_roles".into(),
+            clock_skew_secs: 60,
+        });
+        let error = result
+            .err()
+            .expect("OIDC issuer must use HTTPS in network mode");
+        assert_eq!(error, "BALLAST_OIDC_ISSUER must be an absolute HTTPS URL");
+    }
+
+    #[test]
+    fn discovery_issuer_must_match_configured_issuer() {
+        let configured = "https://issuer.test";
+        assert!(validate_discovery_issuer(configured, configured).is_ok());
+        let slash_error = validate_discovery_issuer(configured, "https://issuer.test/")
+            .expect_err("discovery issuer comparison must be exact");
+        assert_eq!(slash_error.code(), "oidc_issuer_mismatch");
+        let host_error = validate_discovery_issuer(configured, "https://other.test")
+            .expect_err("a different discovery issuer must be rejected");
+        assert_eq!(host_error.code(), "oidc_issuer_mismatch");
+    }
+
+    #[tokio::test]
+    async fn unknown_kid_refresh_is_throttled_after_the_first_attempt() {
+        let decoding = DecodingKey::from_rsa_pem(TEST_RSA_PUBLIC_PEM.as_bytes()).unwrap();
+        let mut keys = HashMap::new();
+        keys.insert("test-key".into(), decoding);
+        let validator = OidcValidatorInner::with_cached_keys(
+            OidcConfig {
+                issuer: "https://127.0.0.1:1".into(),
+                audience: "ballast".into(),
+                role_claim: "ballast_roles".into(),
+                clock_skew_secs: 60,
+            },
+            keys,
+        );
+
+        let first = validator
+            .decoding_key("rotated-key")
+            .await
+            .err()
+            .expect("the first unknown kid must attempt a refresh");
+        assert_eq!(first.code(), "oidc_discovery_failed");
+
+        let second = validator
+            .decoding_key("another-key")
+            .await
+            .err()
+            .expect("subsequent refreshes inside the cooldown must be rejected");
+        assert_eq!(second.code(), "jwks_refresh_throttled");
     }
 }

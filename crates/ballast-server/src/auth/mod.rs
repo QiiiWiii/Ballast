@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{FromRequestParts, State},
-    http::{header, request::Parts},
+    http::{HeaderMap, header, request::Parts},
 };
 use serde::Serialize;
 
@@ -27,6 +27,9 @@ use crate::AppState;
 use crate::api::{ApiError, ApiResult};
 
 use self::oidc::OidcValidatorInner;
+
+pub(crate) const WS_TICKET_SUBPROTOCOL: &str = "ballast-ticket";
+const WS_TICKET_VALUE_PREFIX: &str = "ballast-ticket-value.";
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -119,6 +122,7 @@ impl RequestAuth {
     pub fn require_role(&self, role: Role) -> ApiResult<Option<&Principal>> {
         match &self.session {
             Session::Open => Ok(None),
+            Session::Anonymous => Err(ApiError::unauthorized("missing_bearer_token")),
             Session::User(principal) => {
                 if principal.has_at_least(role) {
                     Ok(Some(principal))
@@ -132,7 +136,7 @@ impl RequestAuth {
     #[allow(dead_code)]
     pub fn actor_id(&self) -> Option<&str> {
         match &self.session {
-            Session::Open => None,
+            Session::Open | Session::Anonymous => None,
             Session::User(principal) => Some(principal.subject.as_str()),
         }
     }
@@ -184,8 +188,7 @@ pub async fn auth_middleware(
     let session = if state.auth.mode == AuthMode::Open {
         Session::Open
     } else if is_ws {
-        let raw = query_param(req.uri().query(), "ticket")
-            .ok_or_else(|| ApiError::unauthorized("ws_ticket_required"))?;
+        let raw = ws_ticket_from_headers(req.headers())?;
         let principal = state.auth.tickets.consume(&raw).await?;
         if !principal.has_at_least(Role::Viewer) {
             return Err(ApiError::forbidden("insufficient_role"));
@@ -214,10 +217,10 @@ pub async fn auth_middleware(
                     .ok_or_else(|| ApiError::internal("oidc_not_initialized"))?;
                 match validator.authenticate(token).await {
                     Ok(principal) => Session::User(principal),
-                    Err(_) => Session::Open,
+                    Err(error) => return Err(error),
                 }
             }
-            Err(_) => Session::Open,
+            Err(_) => Session::Anonymous,
         }
     };
 
@@ -225,13 +228,59 @@ pub async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
-fn query_param(query: Option<&str>, key: &str) -> Option<String> {
-    query.and_then(|query| {
-        query.split('&').find_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            let k = parts.next()?;
-            let v = parts.next().unwrap_or("");
-            (k == key && !v.is_empty()).then(|| v.to_owned())
-        })
-    })
+fn ws_ticket_from_headers(headers: &HeaderMap) -> Result<&str, ApiError> {
+    let protocols = headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::unauthorized("ws_ticket_required"))?;
+    let mut has_ticket_protocol = false;
+    let mut ticket = None;
+    for protocol in protocols.split(',').map(str::trim) {
+        if protocol == WS_TICKET_SUBPROTOCOL {
+            has_ticket_protocol = true;
+        } else if let Some(value) = protocol.strip_prefix(WS_TICKET_VALUE_PREFIX) {
+            if !value.is_empty() {
+                ticket = Some(value);
+            }
+        }
+    }
+    if !has_ticket_protocol {
+        return Err(ApiError::unauthorized("ws_ticket_required"));
+    }
+    ticket.ok_or_else(|| ApiError::unauthorized("ws_ticket_required"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_ws_ticket_from_subprotocols() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "ballast-ticket, ballast-ticket-value.bws_test"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(ws_ticket_from_headers(&headers).unwrap(), "bws_test");
+    }
+
+    #[test]
+    fn rejects_ws_ticket_in_query_only() {
+        let headers = HeaderMap::new();
+        let error = ws_ticket_from_headers(&headers).unwrap_err();
+        assert_eq!(error.code(), "ws_ticket_required");
+    }
+
+    #[test]
+    fn requires_the_ticket_subprotocol_marker() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "ballast-ticket-value.bws_test".parse().unwrap(),
+        );
+        let error = ws_ticket_from_headers(&headers).unwrap_err();
+        assert_eq!(error.code(), "ws_ticket_required");
+    }
 }

@@ -83,6 +83,7 @@ pub async fn issue_ws_ticket(
     let (subject, roles) = match &auth.session {
         Session::Open => ("open-mode", vec![Role::Operator]),
         Session::User(principal) => (principal.subject.as_str(), principal.roles.clone()),
+        Session::Anonymous => return Err(ApiError::unauthorized("missing_bearer_token")),
     };
     let issued = state.auth.tickets.issue(subject, &roles).await?;
     Ok(Json(issued))

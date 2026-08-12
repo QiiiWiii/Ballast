@@ -51,7 +51,10 @@ pub fn role_rank(role: Role) -> u8 {
 
 #[derive(Debug, Clone)]
 pub enum Session {
+    /// Paper/open deployment: authentication is disabled by configuration.
     Open,
+    /// Public route in an OIDC deployment without an optional identity.
+    Anonymous,
     User(Principal),
 }
 

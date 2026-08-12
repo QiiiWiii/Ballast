@@ -11,6 +11,7 @@
     "build": "npm run generate:proto && tsc -p tsconfig.json",
     "check": "npm run build && npm test",
     "dev": "tsx watch src/index.ts",
+    "private-smoke": "node dist/private-readonly-smoke.js",
     "start": "node dist/index.js",
     "test": "node --test dist/*.test.js dist/private/*.test.js"
   },

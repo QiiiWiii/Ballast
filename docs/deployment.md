@@ -35,6 +35,18 @@ docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
 
 private overlay 同时显式启用本地非终态订单查询 worker。默认 paper Compose 将 `BALLAST_ORDER_RECONCILIATION_ENABLED` 固定为 `false`，不调用任何私有 RPC。
 
+配置只读账户后，可直接在 Gateway 容器内运行只读验收。该命令只调用 `AccountService.GetAccountSnapshot`，输出余额、仓位和未结订单数量，不输出金额或凭证：
+
+```bash
+docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml exec \
+  -e BALLAST_PRIVATE_SMOKE_GATEWAY=127.0.0.1:50051 \
+  -e BALLAST_PRIVATE_SMOKE_ACCOUNT_ID=okx-demo-readonly \
+  -e BALLAST_PRIVATE_SMOKE_ACCOUNT_ENVIRONMENT=demo \
+  gateway npm run private-smoke
+```
+
+Gateway 默认不向宿主机暴露 gRPC；不得为 smoke 直接开放公网 gRPC 端口。本地源码运行 Gateway 时，也可使用相同环境变量执行 `make private-smoke`。
+
 ## 镜像与 Tag
 
 | 镜像 | 仓库 |

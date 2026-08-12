@@ -1,4 +1,4 @@
-.PHONY: check rust-check rust-test rust-fmt node-install node-check web-install web-check compose-config compose-up compose-down paper-smoke
+.PHONY: check rust-check rust-test rust-fmt node-install node-check web-install web-check compose-config compose-up compose-down paper-smoke private-smoke
 
 check: rust-fmt rust-check rust-test node-check web-check compose-config
 
@@ -34,3 +34,7 @@ compose-down:
 
 paper-smoke:
 	node scripts/paper-smoke.mjs
+
+private-smoke:
+	npm --prefix gateway-node run build
+	npm --prefix gateway-node run private-smoke

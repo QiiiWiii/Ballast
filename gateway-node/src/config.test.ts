@@ -15,6 +15,13 @@ test("loads explicit gateway bind", () => {
   );
 });
 
+test("loads the optional OKX account secret file path", () => {
+  assert.equal(
+    loadConfig({ BALLAST_OKX_ACCOUNTS_FILE: "/run/secrets/ballast_okx_accounts" }).okxAccountsFile,
+    "/run/secrets/ballast_okx_accounts",
+  );
+});
+
 test("rejects an invalid gateway port", () => {
   assert.throws(() => loadConfig({ BALLAST_GATEWAY_BIND: "127.0.0.1:70000" }));
 });

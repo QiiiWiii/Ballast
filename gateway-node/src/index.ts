@@ -23,7 +23,12 @@ function shutdown(signal: NodeJS.Signals): void {
       process.exitCode = 1;
       return;
     }
-    void runtime.closeAdapters().finally(() => { process.exitCode = 0; });
+    void runtime.closeAdapters()
+      .then(() => { process.exitCode = 0; })
+      .catch((closeError: unknown) => {
+        logger.error({ code: closeError instanceof Error ? closeError.name : "UnknownError" }, "gateway adapter shutdown failed");
+        process.exitCode = 1;
+      });
   });
 }
 

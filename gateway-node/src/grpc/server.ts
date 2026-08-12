@@ -53,6 +53,8 @@ import {
   marketDataService,
   tradingService,
 } from "./proto.js";
+import { PrivateAccountRegistry } from "../private/accounts.js";
+import { PrivateAccountService } from "../private/service.js";
 
 export interface GatewayRuntime {
   readonly server: grpc.Server;
@@ -64,6 +66,8 @@ export async function startGrpcServer(
   logger: Logger,
 ): Promise<GatewayRuntime> {
   const registry = new AdapterRegistry(config.exchangeTimeoutMs, logger);
+  const privateAccounts = PrivateAccountRegistry.fromFile(config.okxAccountsFile);
+  const privateAccountService = new PrivateAccountService(privateAccounts, config.exchangeTimeoutMs, logger);
   const server = new grpc.Server();
   const handlers: MarketDataServiceHandlers = {
     Health: (_call, callback) => callback(null, healthResponse(registry)),
@@ -155,7 +159,7 @@ export async function startGrpcServer(
   };
 
   const accountHandlers: AccountServiceHandlers = {
-    GetAccountSnapshot: disabledUnary,
+    GetAccountSnapshot: asyncUnary((request) => privateAccountService.getSnapshot(request), logger),
     WatchAccountEvents: disabledStream,
   };
   const tradingHandlers: TradingServiceHandlers = {
@@ -179,7 +183,12 @@ export async function startGrpcServer(
   server.addService(tradingService.service, tradingHandlers);
   server.addService(algorithmicTradingService.service, algorithmicTradingHandlers);
   await bind(server, config.bind);
-  return { server, closeAdapters: () => registry.close() };
+  return {
+    server,
+    closeAdapters: async () => {
+      await Promise.all([registry.close(), privateAccountService.close()]);
+    },
+  };
 }
 
 function instrumentFromHistoricalRequest(request: FetchHistoricalBatchRequest__Output): InstrumentKey {

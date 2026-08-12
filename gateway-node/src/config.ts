@@ -3,6 +3,7 @@ export interface GatewayConfig {
   readonly logLevel: string;
   readonly exchangeTimeoutMs: number;
   readonly streamStaleAfterMs: number;
+  readonly okxAccountsFile?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
@@ -14,12 +15,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     throw new Error(`invalid BALLAST_GATEWAY_BIND: ${bind}`);
   }
 
+  const okxAccountsFile = optionalText(env.BALLAST_OKX_ACCOUNTS_FILE);
   return {
     bind,
     logLevel: env.LOG_LEVEL ?? "info",
     exchangeTimeoutMs: positiveInteger(env.EXCHANGE_TIMEOUT_MS, 15_000),
     streamStaleAfterMs: positiveInteger(env.STREAM_STALE_AFTER_MS, 30_000),
+    ...(okxAccountsFile === undefined ? {} : { okxAccountsFile }),
   };
+}
+
+function optionalText(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {

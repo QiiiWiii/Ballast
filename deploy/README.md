@@ -72,6 +72,19 @@ docker compose -f deploy/compose.yaml up -d
 docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 ```
 
+## OKX 只读账户快照（可选）
+
+默认部署不读取交易所凭证。启用 P0.2 只读账户快照时，在宿主机创建 `deploy/secrets/okx-accounts.json`，格式参考 `deploy/okx-accounts.example.json`，并确保 API Key 仅有读取权限、禁用提现、绑定允许 IP。
+
+```bash
+mkdir -p deploy/secrets
+chmod 700 deploy/secrets
+chmod 600 deploy/secrets/okx-accounts.json
+docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
+```
+
+当前仅 `AccountService.GetAccountSnapshot` 支持 OKX 余额、线性永续仓位和普通未结订单快照。反向永续因数量单位尚未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败关闭；账户存在条件单或算法订单时，快照也会显式失败，避免静默遗漏风险敞口。`TradingService`、私有流和原生算法提交继续显式禁用；不得给该阶段的 Key 授予交易或提现权限。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -94,5 +107,5 @@ docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 
 ## 安全说明
 
-交易所 API Key 当前不受支持，不应放入 `.env`。  
+交易所凭证只能通过 `deploy/compose.private.yaml` 挂载的 secret 文件提供，不得放入 `.env`、日志或数据库。
 `BALLAST_LIVE_ENABLED` 固定为 `false`。

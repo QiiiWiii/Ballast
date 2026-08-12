@@ -48,7 +48,7 @@ Rust 的 `/api/v1` 提供交易所健康、真实订阅状态、标的同步、�
 
 ## 前端
 
-React 工作台按交易生命周期组织为控制舱、执行任务、策略中心、执行分析、市场与通道、系统状态和后续能力。交易所是筛选与诊断维度，不拆成五个重复主页面。纸面阶段的零轴图明确标记为“执行残余”；账户快照尚未接入，因此不得显示“净敞口”。
+React 工作台按交易生命周期组织为控制舱、执行任务、策略中心、执行分析、市场与通道、系统状态和后续能力。交易所是筛选与诊断维度，不拆成五个重复主页面。纸面阶段的零轴图明确标记为“执行残余”；前端尚未接入账户快照，因此不得显示“净敞口”。
 
 ## 部署与观测
 
@@ -58,13 +58,11 @@ Compose 只向宿主机暴露 nginx Web/API 入口。PostgreSQL 和 gRPC 只在 
 
 `private_gateway.proto` 定义独立的 `AccountService`、`TradingService` 和 `AlgorithmicTradingService`。普通订单包含 `submission_unknown`；原生算法使用 Binance/OKX 强类型 `oneof`，不允许透传 ccxt 对象或任意方法名。
 
-当前网关不会读取交易所 API Key。能力查询如实返回“文档确认但未私有验收”或“仍需调研”，其余私有 RPC 返回 `FAILED_PRECONDITION/private_services_disabled`。Rust 在 `BALLAST_LIVE_ENABLED=true` 时拒绝启动，直到 OIDC 验签、只读账户对账和提交前风控真正完成。
+默认网关不会读取交易所 API Key。启用 `deploy/compose.private.yaml` 后，网关仅从挂载 secret 文件装配 OKX 只读账户，并开放余额、线性永续仓位和普通未结订单的 `AccountService.GetAccountSnapshot`；所有金融数值都保持为十进制字符串，线性永续仓位按 `contracts × contractSize` 归一为有符号基础资产数量，反向永续因数量单位未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败。条件单或算法订单无法由普通订单契约准确表达，只要账户中存在此类未结订单，整个快照就显式失败。`TradingService`、私有流和原生算法提交继续返回 `FAILED_PRECONDITION/private_services_disabled`。Rust 在 `BALLAST_LIVE_ENABLED=true` 时仍拒绝启动，直到只读账户对账和提交前风控真正完成。
 
 以下能力仍需后续安全实现：
 
-- OIDC 与 `viewer/operator/admin`
-- OIDC discovery/JWKS、PKCE 和单次 WS ticket 消费
-- 只读账户快照与私有流适配器
+- OKX 之外的只读账户快照与私有流适配器
 - 价格保护 IOC、稳定 `client_order_id` 和 `submission_unknown` 对账适配器
 - 限额默认零的风控层
 - 成交驱动双腿对冲和裸露时间熔断

@@ -1,0 +1,12 @@
+# Optional overlay for the P0.2 OKX read-only account snapshot.
+# The default compose file never mounts or reads exchange credentials.
+services:
+  gateway:
+    environment:
+      BALLAST_OKX_ACCOUNTS_FILE: /run/secrets/ballast_okx_accounts
+    secrets:
+      - ballast_okx_accounts
+
+secrets:
+  ballast_okx_accounts:
+    file: ./secrets/okx-accounts.json

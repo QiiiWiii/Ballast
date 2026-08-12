@@ -12,6 +12,7 @@ web/dist/
 .env
 .env.*
 !.env.example
+deploy/secrets/
 
 # Database and runtime
 *.db

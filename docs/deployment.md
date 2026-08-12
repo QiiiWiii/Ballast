@@ -23,6 +23,16 @@ docker compose -f deploy/compose.yaml up -d
 docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 ```
 
+OKX 只读账户快照使用独立 overlay，默认部署不挂载交易所凭证：
+
+```bash
+mkdir -p deploy/secrets
+# 参照 deploy/okx-accounts.example.json 创建并 chmod 600
+docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
+```
+
+账户密钥必须只读、禁用提现并绑定允许 IP。当前 overlay 仅开放余额、线性永续仓位和普通未结订单的 `AccountService.GetAccountSnapshot`；反向永续、缺失稳定 `client_order_id` 的订单、条件或算法订单、下单、撤单和私有流仍失败关闭。
+
 ## 镜像与 Tag
 
 | 镜像 | 仓库 |
@@ -71,6 +81,5 @@ Web 镜像在容器启动时写入公开 OIDC 运行时配置，同一镜像可�
 
 - 生产环境启用 OIDC；未配置时仅适合纸面研究和内部验证。
 - 内部 RPC 身份认证/加密或等价服务网格策略。
-- 按交易所拆分私有账户网关。
-- 密钥通过 Compose secrets 或目标环境 secret manager 挂载。
+- 扩展到 OKX 之外的单交易所私有账户适配器。
 - 交易限额、kill switch、订单对账和告警接收端。

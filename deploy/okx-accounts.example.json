@@ -1,0 +1,12 @@
+{
+  "accounts": [
+    {
+      "account_id": "okx-demo-readonly",
+      "exchange": "okx",
+      "environment": "demo",
+      "api_key": "replace-with-read-only-key",
+      "secret": "replace-with-secret",
+      "password": "replace-with-passphrase"
+    }
+  ]
+}

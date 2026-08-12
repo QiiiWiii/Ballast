@@ -18,6 +18,7 @@ edition = "2024"
 rust-version = "1.88"
 publish = false
 license = "Apache-2.0"
+authors = ["seven <sevenold@outlook.com>"]
 repository = "https://github.com/QiiiWiii/Ballast"
 
 [workspace.dependencies]

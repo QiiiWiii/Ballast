@@ -23,7 +23,7 @@ Ballast 处于早期开发阶段。默认配置面向研究回放与纸面执行
 请**不要**在公开 issue、讨论区或 PR 中披露可利用的安全问题或真实凭证。
 
 优先使用 GitHub 仓库的 **Security Advisories / private vulnerability reporting**（若已启用）。
-若不可用，请通过仓库维护者提供的私有渠道联系。
+若不可用，请邮件联系维护者：`sevenold@outlook.com`（勿在邮件中粘贴真实交易密钥）。
 
 报告请尽量包含：
 

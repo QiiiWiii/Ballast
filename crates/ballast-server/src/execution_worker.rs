@@ -36,7 +36,11 @@ struct InstrumentTickGate {
 }
 
 impl InstrumentTickGate {
-    async fn lock(&self, instrument_id: Uuid, metrics: &AppMetrics) -> tokio::sync::OwnedMutexGuard<()> {
+    async fn lock(
+        &self,
+        instrument_id: Uuid,
+        metrics: &AppMetrics,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
         let lock = {
             let mut locks = self.locks.lock().await;
             locks

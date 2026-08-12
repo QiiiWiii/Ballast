@@ -2,8 +2,8 @@ use ballast_core::{
     Exchange, Instrument, InstrumentId, MarketKind, QuantityUnit, Side, StrategyKind,
 };
 use ballast_storage::{
-    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill,
-    NewStrategyTemplate, NewStrategyTemplateVersion, SliceRecord,
+    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewStrategyTemplate,
+    NewStrategyTemplateVersion, SliceRecord,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -393,4 +393,3 @@ async fn historical_backfill_is_resumable_and_deduplicated() {
         end.timestamp_micros()
     );
 }
-

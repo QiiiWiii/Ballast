@@ -1,8 +1,8 @@
 mod analytics;
 mod error;
 mod events;
-mod history;
 mod exchanges;
+mod history;
 mod instruments;
 mod live;
 mod strategies;

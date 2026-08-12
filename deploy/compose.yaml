@@ -1,5 +1,8 @@
 name: ballast
 
+# Production-oriented stack: pulls prebuilt images from Docker Hub.
+# Local source builds: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build
+
 services:
   postgres:
     image: postgres:17-bookworm
@@ -19,9 +22,7 @@ services:
 
   gateway:
     image: ${BALLAST_IMAGE_NAMESPACE:-sevenold}/ballast-gateway:${BALLAST_IMAGE_TAG:-latest}
-    build:
-      context: ..
-      dockerfile: deploy/gateway.Dockerfile
+    pull_policy: always
     environment:
       BALLAST_GATEWAY_BIND: 0.0.0.0:50051
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -32,9 +33,7 @@ services:
 
   server:
     image: ${BALLAST_IMAGE_NAMESPACE:-sevenold}/ballast-server:${BALLAST_IMAGE_TAG:-latest}
-    build:
-      context: ..
-      dockerfile: deploy/server.Dockerfile
+    pull_policy: always
     environment:
       BALLAST_SERVER_BIND: 0.0.0.0:8080
       BALLAST_GATEWAY_ENDPOINT: http://gateway:50051
@@ -52,9 +51,7 @@ services:
 
   web:
     image: ${BALLAST_IMAGE_NAMESPACE:-sevenold}/ballast-web:${BALLAST_IMAGE_TAG:-latest}
-    build:
-      context: ..
-      dockerfile: deploy/web.Dockerfile
+    pull_policy: always
     ports:
       - "${BALLAST_WEB_PORT:-8080}:80"
     depends_on:

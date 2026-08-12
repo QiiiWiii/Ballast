@@ -1,15 +1,15 @@
 # 部署说明
 
-首个共享环境面向单台 Linux，通过私网或 VPN 访问。Compose 只公开 nginx 的 Web/API 端口，不公开 PostgreSQL、Prometheus 或内部 gRPC。
+首个共享环境面向单台 Linux（**amd64 或 arm64**），通过私网或 VPN 访问。Compose 只公开 nginx 的 Web/API 端口，不公开 PostgreSQL、Prometheus 或内部 gRPC。
 
-业务镜像由 GitHub Actions 推送到 Docker Hub；运行机默认 pull，不在服务器上编译 Rust/Node。
+`deploy/compose.yaml` 只使用 Docker Hub 预构建镜像；运行机默认 `pull`，不在服务器上编译。
 
 ## 启动
 
 ```bash
 cp .env.example .env
 # 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN
-# Docker Hub 命名空间若不是默认值，设置 BALLAST_IMAGE_NAMESPACE
+# 生产建议固定：BALLAST_IMAGE_TAG=sha-<short>
 docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
 ```
@@ -19,20 +19,32 @@ docker compose -f deploy/compose.yaml up -d
 从当前源码本地构建（可选）：
 
 ```bash
-docker compose -f deploy/compose.yaml up --build -d
+docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 ```
+
+## 镜像与 Tag
+
+| 镜像 | 仓库 |
+|------|------|
+| server | `{user}/ballast-server` |
+| gateway | `{user}/ballast-gateway` |
+| web | `{user}/ballast-web` |
+
+| Tag | 含义 |
+|-----|------|
+| `latest` / `main` | `main` 分支最新构建（可变） |
+| `sha-<short>` | 对应 git commit，不可变，**生产推荐** |
+| `vX.Y.Z` 等 | git 发布标签 |
+
+CI 为每个 tag 推送 **multi-arch manifest**（`linux/amd64` + `linux/arm64`）。ARM 服务器无需额外参数，Docker 会按本机架构选择层。
+
+三套业务镜像必须使用**同一个** `BALLAST_IMAGE_TAG`，避免混用不同提交。
 
 ## 镜像发布
 
 - 工作流：`.github/workflows/docker-publish.yml`
 - 触发：`main` 推送、`v*` 标签、`workflow_dispatch`
 - Secrets：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
-- 镜像：
-  - `{user}/ballast-server`
-  - `{user}/ballast-gateway`
-  - `{user}/ballast-web`
-- 标签：`latest`（main）、分支名、semver、短 SHA
-- 平台：`linux/amd64`
 
 ## 服务
 

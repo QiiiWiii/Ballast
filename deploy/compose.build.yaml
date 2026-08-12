@@ -1,0 +1,22 @@
+# Optional overlay: build images from the local git checkout instead of Docker Hub.
+# Usage:
+#   docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
+
+services:
+  gateway:
+    pull_policy: build
+    build:
+      context: ..
+      dockerfile: deploy/gateway.Dockerfile
+
+  server:
+    pull_policy: build
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+
+  web:
+    pull_policy: build
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile

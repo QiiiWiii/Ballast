@@ -42,7 +42,7 @@ docker compose -f deploy/compose.yaml up -d
 从当前工作区源码构建：
 
 ```bash
-docker compose -f deploy/compose.yaml up --build
+docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build
 ```
 
 容器启动不代表每家交易所公网功能都可用。当前网关已实现五家公共标的、REST 盘口、WebSocket 盘口和逐笔成交；实际可用性仍受开发机出口地域、交易所限频和交易所维护状态影响。使用 `/api/v1/exchanges` 查看真实健康状态，不得把 `degraded` 静默改写为可用。

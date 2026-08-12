@@ -54,3 +54,16 @@ docker compose -f deploy/compose.yaml up --build
 - Node 网关不拥有策略、任务状态和风险决策。
 - 任何状态不确定的下单请求都必须先对账，不得盲目重试。
 - `BALLAST_LIVE_ENABLED` 默认 false；当前实现检测到 true 会拒绝启动。
+
+## 文档与社区
+
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- 安全政策：[SECURITY.md](SECURITY.md)
+- 开源准备核对：[docs/open-source-readiness.md](docs/open-source-readiness.md)
+- 第三方许可证摘要：[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
+
+## License
+
+本项目以 [Apache License 2.0](LICENSE) 发布。
+

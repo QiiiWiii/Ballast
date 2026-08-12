@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 以 Apache License 2.0 明确开源许可证，并完善 CONTRIBUTING / SECURITY / CODE_OF_CONDUCT。
+
 ### Added
 
 - 初始化 Rust 核心、Node/ccxt 网关、Protobuf 契约、PostgreSQL 迁移和部署骨架。

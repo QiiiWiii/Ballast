@@ -1,80 +1,39 @@
 # Changelog
 
-本项目遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 的结构。正式发布后采用语义化版本。
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 和语义化版本。
 
 ## [Unreleased]
 
-### Added
-
-- 增加路线图：README 摘要与 docs/roadmap.md 的纸面 v0.1、live P0 安全门槛与非目标。
-- 增加 OKX 只读普通订单查询、非终态订单租约扫描与周期对账 worker；不开放下单或取消。
-- 增加可选 OIDC 鉴权：JWKS 验签、viewer/operator/admin 角色、写路径保护与单次 WS ticket。
-
-### Removed
-
-- 移除 Alpaca/IEX 股票研究实验台、相关 crate、API、迁移与前端页面。
-
-
-### Changed
-
-- 以 Apache License 2.0 明确开源许可证，并完善 CONTRIBUTING / SECURITY / CODE_OF_CONDUCT。
+## [0.1.0] - 2026-08-12
 
 ### Added
 
-- 初始化 Rust 核心、Node/ccxt 网关、Protobuf 契约、PostgreSQL 迁移和部署骨架。
-- 增加架构、开发、部署、安全及协作约束文档。
-- 增加 Rust、Node 和 Compose 的持续集成检查。
-- 将网关契约收敛为公共 `MarketDataService`，统一五家交易所的标的、盘口及逐笔成交。
-- 增加现货、线性/反向永续领域模型，以及 base、quote、contracts 三种显式任务单位。
-- 增加标的缓存、交易所健康、纸面切片和恢复调度迁移。
-- 增加公共行情驱动的纸面 TWAP/POV、价格保护 IOC、残余保留和事件序号补发。
-- 增加 `/api/v1` REST、WebSocket、Prometheus 指标和 PostgreSQL repository 集成测试。
-- 增加中英文 React 控制舱：管理概览、运营执行台、任务证据和市场能力页。
-- 增加 nginx 单入口、内部数据库/gRPC、Prometheus 与定时备份 Compose 服务。
-- 增加系统共享策略模板、不可变版本、归档和现有任务参数迁移。
-- 增加运营控制舱、执行质量与运营效率分析、交易所详情和真实订阅状态接口。
-- 将前端重构为执行任务中心的信息架构，新增策略中心、执行分析、系统状态和后续能力页面。
-- 增加 `AccountService`、`TradingService`、`AlgorithmicTradingService` 强类型 Protobuf 契约和 Rust 薄客户端。
-- 增加 live 任务审批、多账户元数据、订单/原生算法、零默认风控、对冲和 WS ticket 的 `0004` 迁移。
-- 增加审批、账户对账、风险和对冲锁舱页面；未配置私有能力时不展示伪数据或生产控件。
-- 增加 Binance/OKX 原生算法研究能力接口，Bybit/Gate/Bitget 保持显式待调研状态。
-- 增加五家公共标的同步的部分成功结果和交易所健康状态持久化。
-- 增加策略中心 Library/Cases/Data/Experiments 四分区、市场回放带、策略比较 ledger 和人工验证决定。
-- 增加验证 run 多 run 对比、JSON/CSV 导出、案例 evaluation_sessions 可配（1–200）与 run 级 case_snapshot 回放。
+- 提供 Binance、OKX、Bybit、Gate.io 和 Bitget 公共标的、REST/WS 行情、健康状态与可恢复历史回补。
+- 提供版本化策略模板、纸面 TWAP/POV、价格保护模拟 IOC、切片审计与 WebSocket 断线补发。
+- 提供中英文 React 运营工作台，覆盖执行任务、策略、分析、市场通道与系统状态。
+- 提供 PostgreSQL 权威状态、Prometheus 指标、定时备份和 Docker Compose 部署。
+- 提供 `linux/amd64` 与 `linux/arm64` 多架构镜像发布工作流。
+- 提供可选 OIDC 鉴权：JWKS 验签、`viewer/operator/admin` 角色、Web PKCE 和单次 WebSocket ticket。
+- 提供 OKX 只读账户快照、按 `client_order_id` 查询与本地非终态订单周期对账 worker；不开放下单或撤单。
+- 提供强类型私有交易与原生算法 Protobuf 契约，未验收能力保持失败关闭。
 
 ### Changed
 
-- 将前端控制平面从左侧栏收敛为两层顶部导航，采用“日间舰桥”主题；新增与稳定轴同源的 Ballast 标志、favicon 和品牌使用规范。
-- 重整中文界面的字体职责与字号层级：中文导航、标题、状态和表单使用界面字体，窄体与等宽字体仅保留给品牌、关键数值和审计数据。
-- 将前端从卡片式原型重构为机构执行工作台：按执行工作流、数据与通道、安全与系统分组导航，增加全局环境状态栏、执行 blotter、运营状态总账和桌面/移动双布局。
-- 控制舱收敛为异常优先的信息层级，保留“龙骨稳定轴”作为纸面阶段执行残余的唯一标志性可视化。
-- Node 使用 Protobuf 生成的 TypeScript 类型，`ccxt` 固定为 `4.5.58`。
+- Rust 作为策略、任务、风控与持久化事实源；Node/ccxt 网关仅负责交易所通信与规范化。
+- 任务创建强制引用不可变 `template_version_id`，移除直接提交策略参数的旧契约。
 - 执行状态收敛为 `scheduled/running/paused/cancelling/completed/cancelled/expired/failed`。
-- 任务创建契约改为强制引用 `template_version_id`，移除直接提交策略参数的旧契约。
-- 移除旧 `/operations`、`/tasks/{id}` 和 `/markets` 前端路由。
-- 将 managed 切片决策与执行状态边界迁入 `ballast-execution`，server worker 只装配行情、持久化和调度。
-- 精确固定实际发布的 `barter-instrument 0.3.1`；原计划中的 `0.11.0` 在 crates.io 不存在。
+- Node 使用 Protobuf 生成类型，`ccxt` 固定为 `4.5.58`。
+- 采用 Apache License 2.0，并补齐贡献、安全、行为准则与开源准备文档。
 
 ### Fixed
 
-- 控制舱优先队列不再把已完成、已取消等终态任务误判为临近截止任务。
-- 相同暂停状态与原因只更新下一检查时间，不再重复递增任务版本、写状态迁移事件或累计暂停指标。
-- WebSocket 首连从最新事件建立游标，断线按已确认序号补发；前端合并刷新任务、切片和事件，避免历史事件触发请求风暴。
-- 任务详情状态事件随实时执行刷新；系统状态页展示客户端实际观察到的 WebSocket 状态。
-- 移动端导航自动将当前栏目滚入视区，盘口精确值改为单列完整展示，创建页摘要不再被顶部栏遮挡。
-- 创建任务改为按交易所和市场类型筛选的可搜索标的选择器，不再一次渲染数千个原生选项。
-- 交易所页面将聚合耗时明确命名为健康查询延迟，不再伪装成单交易所 REST 延迟。
-- 单家交易所不可用时不再拖垮整批标的同步，失败交易所保持显式 degraded 状态。
-- Gate.io 与 Bitget 返回零值最小交易限制时按“限制缺失”处理，避免无效领域值阻断整家标的同步。
-- 切片导致任务进入 running 或 completed 时，在同一事务中补写任务状态事件，保证 WebSocket 消费者不会漏掉终态。
-- TWAP 当前切片低于交易所最小数量、但任务总残余仍可执行时继续等待下一 tick 重新均摊，不再错误地以 0% 完成任务。
-- 标的目录改为服务端搜索与分页，控制舱和任务列表只按实际引用的标的 ID 查询，避免一次渲染数千行数据。
-- WebSocket 行情健康心跳和运营控制舱改读数据库快照；交易所与系统页停止能力接口轮询，不再按在线客户端数量级联触发五家网关能力查询。
-- 交易所健康历史只记录状态或错误码变化，不再周期性重复写入相同 `ready` 状态。
-- 低于最小交易限制的可恢复切片写入 `slice_deferred` 审计事件；单任务事件查询返回最新窗口并保持正序。
-- 标的选择器在焦点离开或点击外部时关闭，英文空状态同步反映当前筛选结果。
-- 单交易所详情只探测目标 adapter，不再加载全部标的或刷新其余四家健康状态；五家列表改用数据库聚合计数。
-- 交易所健康快照持久化当前探测延迟，控制舱和系统页不再展示历史状态迁移附带的陈旧耗时。
-- 系统状态按五家 adapter 的实际状态聚合，任一家降级时不再错误显示网关正常。
-- 交易所详情加载期间显示明确的实时读取状态，不再用 `0ms` 和 `0` 标的伪装尚未返回的数据。
-- 标的选择器点击外部关闭后可直接再次点击输入框展开。
+- 公共标的同步允许单个交易所失败，并保留显式 degraded 状态。
+- 单个市场无法满足精度契约时显式拒绝该市场，不再拖垮同一交易所的其余合法标的。
+- 默认 paper 部署不再启动私有订单对账 worker，避免无密钥环境持续产生认证错误。
+- 任务、切片和有序事件在同一事务中更新，避免终态事件丢失。
+- 暂停重试、最小交易限制、标的分页与行情健康路径不再制造重复事件或伪数据。
+- WebSocket 首连与重连使用确认游标，前端批量合并补发事件。
+- 交易所详情、系统状态和控制舱使用持久化健康快照，避免在页面刷新时级联触发公网探测。
+
+[Unreleased]: https://github.com/QiiiWiii/Ballast/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/QiiiWiii/Ballast/releases/tag/v0.1.0

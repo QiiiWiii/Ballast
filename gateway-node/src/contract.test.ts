@@ -4,7 +4,7 @@ import ccxt from "ccxt";
 import type { Exchange as CcxtExchange, MarketInterface as CcxtMarket } from "ccxt";
 
 import type { ExchangeId } from "./exchanges/adapter.js";
-import { nextHistoricalCursor, normalizeHistoricalCandle, normalizeHistoricalTrade, normalizeInstrument, normalizeOrderBook, normalizeTrade, withReadRetry } from "./exchanges/ccxt-adapter.js";
+import { nextHistoricalCursor, normalizeHistoricalCandle, normalizeHistoricalTrade, normalizeInstrument, normalizeInstruments, normalizeOrderBook, normalizeTrade, withReadRetry } from "./exchanges/ccxt-adapter.js";
 
 const exchanges: readonly ExchangeId[] = ["binance", "okx", "bybit", "gate_io", "bitget"];
 const decimalPlacesClient = { precisionMode: ccxt.DECIMAL_PLACES } as CcxtExchange;
@@ -106,6 +106,32 @@ test("partial historical failures surface after the retry budget", async () => {
 
 test("missing precision fails explicitly", () => {
   assert.throws(() => normalizeInstrument("bitget", decimalPlacesClient, marketFixture({ spot: true, missingPrecision: true })), /precision is unavailable/);
+});
+
+test("instrument listing rejects invalid markets without dropping valid markets", async () => {
+  const { instruments, rejected } = normalizeInstruments("okx", decimalPlacesClient, [
+    marketFixture({ spot: true }),
+    marketFixture({ spot: true, missingPrecision: true }),
+  ]);
+  assert.equal(instruments.length, 1);
+  assert.equal(instruments[0]?.key.symbol, "BTC/USDT:USDT");
+  assert.deepEqual(rejected, [{
+    symbol: "BTC/USDT:USDT",
+    reason: "market price precision is unavailable",
+  }]);
+});
+
+test("instrument listing does not downgrade unexpected normalization failures", () => {
+  const invalidClient = { precisionMode: ccxt.DECIMAL_PLACES } as CcxtExchange;
+  const market = marketFixture({ spot: true });
+  Object.defineProperty(market, "precision", {
+    get() { throw new TypeError("programmer failure"); },
+  });
+
+  assert.throws(
+    () => normalizeInstruments("okx", invalidClient, [market]),
+    /programmer failure/,
+  );
 });
 
 test("non-positive optional trading limits are treated as unavailable", () => {

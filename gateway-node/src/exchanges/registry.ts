@@ -26,7 +26,7 @@ export class AdapterRegistry {
   constructor(timeoutMs: number, logger: Logger) {
     this.#logger = logger;
     for (const exchange of EXCHANGES) {
-      this.#adapters.set(exchange, new CcxtMarketDataAdapter(exchange, timeoutMs));
+      this.#adapters.set(exchange, new CcxtMarketDataAdapter(exchange, timeoutMs, logger));
       this.#statuses.set(exchange, { exchange, status: "idle" });
     }
   }

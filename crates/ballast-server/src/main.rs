@@ -69,7 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         order_books,
         metrics.clone(),
     );
-    order_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
+    if order_reconciliation_enabled()? {
+        order_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
+    } else {
+        info!("private order reconciliation worker is disabled");
+    }
 
     let cors_origin = std::env::var("BALLAST_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_owned())
@@ -109,6 +113,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn order_reconciliation_enabled() -> Result<bool, Box<dyn std::error::Error>> {
+    let value = std::env::var("BALLAST_ORDER_RECONCILIATION_ENABLED").ok();
+    parse_enabled_flag(value.as_deref()).map_err(Into::into)
+}
+
+fn parse_enabled_flag(value: Option<&str>) -> Result<bool, &'static str> {
+    match value {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err("BALLAST_ORDER_RECONCILIATION_ENABLED must be true or false"),
+    }
+}
+
 async fn health(
     State(state): State<AppState>,
 ) -> Result<Json<HealthResponse>, (StatusCode, Json<HealthResponse>)> {
@@ -134,5 +151,18 @@ async fn health(
 async fn shutdown_signal() {
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!(%error, "failed to install shutdown signal handler");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_enabled_flag;
+
+    #[test]
+    fn reconciliation_flag_is_explicit() {
+        assert_eq!(parse_enabled_flag(None), Ok(false));
+        assert_eq!(parse_enabled_flag(Some("false")), Ok(false));
+        assert_eq!(parse_enabled_flag(Some("true")), Ok(true));
+        assert!(parse_enabled_flag(Some("1")).is_err());
     }
 }

@@ -85,6 +85,8 @@ docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
 
 当前仅 `AccountService.GetAccountSnapshot` 支持 OKX 余额、线性永续仓位和普通未结订单快照。反向永续因数量单位尚未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败关闭；账户存在条件单或算法订单时，快照也会显式失败，避免静默遗漏风险敞口。`TradingService`、私有流和原生算法提交继续显式禁用；不得给该阶段的 Key 授予交易或提现权限。
 
+private overlay 会将 `BALLAST_ORDER_RECONCILIATION_ENABLED=true`，仅用于查询本地已知非终态订单。默认 paper Compose 固定为 `false`，不触发私有账户请求。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -97,11 +99,12 @@ docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
 | `BALLAST_OIDC_ISSUER` | 空 | OIDC HTTPS issuer；为空时保持 paper/open 模式 |
 | `BALLAST_OIDC_AUDIENCE` | 空 | API access token audience |
 | `BALLAST_OIDC_CLIENT_ID` | 空 | Web Authorization Code + PKCE 公共客户端 ID |
+| `BALLAST_ORDER_RECONCILIATION_ENABLED` | `false` | 仅 private overlay 启用本地已知订单查询 worker |
 
 ## CI 发布
 
 - 工作流：`.github/workflows/docker-publish.yml`
-- 触发：`main` 推送、`v*` 标签、手动 `workflow_dispatch`
+- 触发：`v*` 标签、手动 `workflow_dispatch`
 - Secrets：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
 - 平台：`linux/amd64,linux/arm64`
 

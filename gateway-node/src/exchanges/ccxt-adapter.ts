@@ -1,4 +1,5 @@
 import ccxt from "ccxt";
+import type { Logger } from "pino";
 import type {
   Exchange as CcxtExchange,
   MarketInterface as CcxtMarket,
@@ -39,9 +40,11 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
   readonly exchange: ExchangeId;
   readonly #rest: CcxtExchange;
   readonly #stream: CcxtExchange;
+  readonly #logger: Logger;
 
-  constructor(exchange: ExchangeId, timeoutMs: number) {
+  constructor(exchange: ExchangeId, timeoutMs: number, logger: Logger) {
     this.exchange = exchange;
+    this.#logger = logger;
     const ccxtId = CCXT_IDS[exchange];
     const Rest = ccxt[ccxtId as keyof typeof ccxt] as unknown as CcxtConstructor;
     const Pro = ccxt.pro[ccxtId as keyof typeof ccxt.pro] as unknown as CcxtConstructor;
@@ -52,10 +55,22 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
 
   async listInstruments(reload: boolean): Promise<readonly Instrument[]> {
     const markets = await this.#rest.loadMarkets(reload);
-    return Object.values(markets)
+    const candidates = Object.values(markets)
       .filter((market): market is CcxtMarket => market !== undefined)
-      .filter((market) => market.spot || market.swap)
-      .map((market) => normalizeInstrument(this.exchange, this.#rest, market));
+      .filter((market) => market.spot || market.swap);
+    const { instruments, rejected } = normalizeInstruments(this.exchange, this.#rest, candidates);
+    if (rejected.length > 0) {
+      this.#logger.warn({
+        exchange: this.exchange,
+        rejectedCount: rejected.length,
+        candidateCount: candidates.length,
+        rejected: rejected.slice(0, 10),
+      }, "exchange markets rejected by the instrument contract");
+    }
+    if (instruments.length === 0) {
+      throw new Error(`no ${this.exchange} markets satisfy the instrument contract`);
+    }
+    return instruments;
   }
 
   async capabilities(): Promise<ExchangeCapabilities> {
@@ -148,6 +163,34 @@ export class CcxtMarketDataAdapter implements MarketDataAdapter {
     await Promise.allSettled([this.#rest.close(), this.#stream.close()]);
   }
 
+}
+
+export function normalizeInstruments(
+  exchange: ExchangeId,
+  client: CcxtExchange,
+  markets: readonly CcxtMarket[],
+): {
+  readonly instruments: readonly Instrument[];
+  readonly rejected: readonly { symbol: string; reason: string }[];
+} {
+  const instruments: Instrument[] = [];
+  const rejected: Array<{ symbol: string; reason: string }> = [];
+  for (const market of markets) {
+    try {
+      instruments.push(normalizeInstrument(exchange, client, market));
+    } catch (error) {
+      if (!isMarketContractError(error)) throw error;
+      rejected.push({
+        symbol: market.symbol,
+        reason: error.message,
+      });
+    }
+  }
+  return { instruments, rejected };
+}
+
+function isMarketContractError(error: unknown): error is Error {
+  return error instanceof Error && /^market(?:\.| )/.test(error.message);
 }
 
 export function normalizeHistoricalCandle(

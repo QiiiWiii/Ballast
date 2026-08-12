@@ -56,3 +56,23 @@ curl -X POST http://localhost:8080/api/v1/instruments/sync \
 ```
 
 纸面执行会读取任务绑定交易所的实时公共盘口，但不会调用任何真实下单接口。
+
+## Paper 端到端 smoke
+
+完整环境启动后，执行：
+
+```bash
+make paper-smoke
+```
+
+脚本会使用 OKX `BTC/USDT` 现货完成：服务健康检查、标的同步、创建唯一 TWAP 模板、创建纸面任务，并等待切片与审计事件。任何一步缺少真实证据都会以非零状态退出。
+
+对已部署环境或启用 OIDC 的环境：
+
+```bash
+BALLAST_SMOKE_BASE_URL=https://ballast.example.com \
+BALLAST_SMOKE_BEARER_TOKEN='<operator access token>' \
+make paper-smoke
+```
+
+可选覆盖：`BALLAST_SMOKE_EXCHANGE`、`BALLAST_SMOKE_SYMBOL`、`BALLAST_SMOKE_TARGET_AMOUNT`、`BALLAST_SMOKE_TIMEOUT_MS`。

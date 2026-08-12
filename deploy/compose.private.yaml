@@ -6,6 +6,9 @@ services:
       BALLAST_OKX_ACCOUNTS_FILE: /run/secrets/ballast_okx_accounts
     secrets:
       - ballast_okx_accounts
+  server:
+    environment:
+      BALLAST_ORDER_RECONCILIATION_ENABLED: "true"
 
 secrets:
   ballast_okx_accounts:

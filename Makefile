@@ -1,4 +1,4 @@
-.PHONY: check rust-check rust-test rust-fmt node-install node-check web-install web-check compose-config compose-up compose-down
+.PHONY: check rust-check rust-test rust-fmt node-install node-check web-install web-check compose-config compose-up compose-down paper-smoke
 
 check: rust-fmt rust-check rust-test node-check web-check compose-config
 
@@ -31,3 +31,6 @@ compose-up:
 
 compose-down:
 	docker compose -f deploy/compose.yaml down
+
+paper-smoke:
+	node scripts/paper-smoke.mjs

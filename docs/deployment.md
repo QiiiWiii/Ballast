@@ -33,6 +33,8 @@ docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
 
 账户密钥必须只读、禁用提现并绑定允许 IP。当前 overlay 仅开放余额、线性永续仓位和普通未结订单的 `AccountService.GetAccountSnapshot`；反向永续、缺失稳定 `client_order_id` 的订单、条件或算法订单、下单、撤单和私有流仍失败关闭。
 
+private overlay 同时显式启用本地非终态订单查询 worker。默认 paper Compose 将 `BALLAST_ORDER_RECONCILIATION_ENABLED` 固定为 `false`，不调用任何私有 RPC。
+
 ## 镜像与 Tag
 
 | 镜像 | 仓库 |
@@ -55,6 +57,14 @@ git tag v0.1.0 && git push origin v0.1.0
 ```
 
 CI 为每个 tag 推送 **multi-arch manifest**（`linux/amd64` + `linux/arm64`）。三套业务镜像必须使用**同一个** `BALLAST_IMAGE_TAG`。
+
+镜像启动后执行 paper 端到端验收：
+
+```bash
+BALLAST_SMOKE_BASE_URL="${BALLAST_PUBLIC_ORIGIN}" make paper-smoke
+```
+
+脚本会在系统中保留唯一命名的模板、任务、切片和事件，作为发布验收记录。
 
 ## 镜像发布
 

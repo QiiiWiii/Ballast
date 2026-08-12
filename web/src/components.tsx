@@ -4,6 +4,8 @@ import { ReactNode, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ExecutionTask, StrategyTemplate } from "./api";
+import { useAuth } from "./auth";
+import type { AuthConfig } from "./auth/config";
 import { EventStreamStatusContext, useEventStream } from "./hooks";
 import i18n from "./i18n";
 
@@ -51,9 +53,10 @@ export function BallastLogo({ compact = false }: { compact?: boolean }) {
   </span>;
 }
 
-export function AppShell() {
+export function AppShell({ authConfig }: { authConfig: AuthConfig }) {
   const { t } = useTranslation();
-  const connected = useEventStream();
+  const auth = useAuth();
+  const connected = useEventStream(authConfig);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const navigation = useRef<HTMLElement>(null);
   const language = i18n.language.startsWith("zh") ? "zh" : "en";
@@ -76,6 +79,7 @@ export function AppShell() {
         <div className="environment-chip"><i aria-hidden="true"/><b>PAPER</b><span>{t("paperBoundaryShort")}</span></div>
         <div className="command-status">
           <span className={`link-state ${connected ? "is-live" : ""}`}><i/>{connected ? t("eventStreamOnline") : t("eventStreamOffline")}</span>
+          {auth.status === "authenticated" ? <button className="session-button" onClick={() => void auth.logout()} title={auth.user.profile.sub}>Sign out</button> : null}
           <button className="language-switch" onClick={switchLanguage}>{language === "zh" ? "EN" : "中"}</button>
         </div>
       </div>

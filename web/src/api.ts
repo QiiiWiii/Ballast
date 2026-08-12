@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { getAccessToken, markAuthenticationRequired } from "./auth/session";
+
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/);
 const timestamp = z.string().datetime({ offset: true });
 export const exchangeSchema = z.enum(["binance", "okx", "bybit", "gate_io", "bitget"]);
@@ -156,10 +158,14 @@ export interface InstrumentQuery {
   offset?: number;
 }
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(path, init);
+export async function request(path: string, init?: RequestInit): Promise<unknown> {
+  const headers = new Headers(init?.headers);
+  const accessToken = getAccessToken();
+  if (accessToken) headers.set("authorization", `Bearer ${accessToken}`);
+  const response = await fetch(path, { ...init, headers });
   const body = await response.json().catch(() => null) as unknown;
   if (!response.ok) {
+    if (response.status === 401) markAuthenticationRequired();
     const parsed = z.object({ error: z.object({ code: z.string(), params: z.record(z.string(), z.unknown()).optional() }) }).safeParse(body);
     throw new Error(parsed.success ? parsed.data.error.code : `http_${response.status}`);
   }
@@ -204,4 +210,5 @@ export const api = {
   analytics: async (query = "window=24h") => analyticsSchema.parse(await request(`/api/v1/analytics/executions?${query}`)),
   dashboard: async () => dashboardSchema.parse(await request("/api/v1/dashboard/operations?window=24h")),
   health: async () => z.object({ status: z.string(), service: z.string(), version: z.string() }).parse(await request("/health")),
+  wsTicket: async () => z.object({ ticket: z.string().min(1), expires_at: timestamp }).parse(await request("/api/v1/ws-tickets", { method: "POST" })),
 };

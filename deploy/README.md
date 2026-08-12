@@ -51,6 +51,7 @@ git clone --depth 1 https://github.com/QiiiWiii/Ballast.git
 cd Ballast
 cp .env.example .env
 # 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN
+# 启用认证时同时设置 BALLAST_OIDC_ISSUER/AUDIENCE/CLIENT_ID
 # 可选：BALLAST_IMAGE_TAG=sha-xxxxxxx
 
 docker compose -f deploy/compose.yaml pull
@@ -80,6 +81,9 @@ docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 | `POSTGRES_PASSWORD` | `ballast-local-only` | 共享环境必须修改 |
 | `BALLAST_PUBLIC_ORIGIN` | `http://localhost:8080` | 浏览器访问源 |
 | `BALLAST_WEB_PORT` | `8080` | 宿主机端口 |
+| `BALLAST_OIDC_ISSUER` | 空 | OIDC HTTPS issuer；为空时保持 paper/open 模式 |
+| `BALLAST_OIDC_AUDIENCE` | 空 | API access token audience |
+| `BALLAST_OIDC_CLIENT_ID` | 空 | Web Authorization Code + PKCE 公共客户端 ID |
 
 ## CI 发布
 

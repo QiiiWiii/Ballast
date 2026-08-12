@@ -86,6 +86,8 @@ button:disabled { cursor: not-allowed; opacity: .46; }
 .link-state.is-live i { background: var(--signal-green); box-shadow: 0 0 0 4px rgba(63,141,114,.12); }
 .language-switch { width: 36px; height: 36px; padding: 0; color: #d9e4e3; background: #102b34; border: 1px solid #34505a; border-radius: 50%; cursor: pointer; font: 10px var(--font-data); }
 .language-switch:hover { color: #fff; border-color: var(--chart-500); }
+.session-button { min-height: 32px; padding: 0 10px; color: #b7c7c8; background: transparent; border: 1px solid #34505a; border-radius: var(--control-radius); cursor: pointer; font: 10px var(--font-data); }
+.session-button:hover { color: #fff; border-color: var(--chart-500); }
 .top-navigation { height: 44px; padding: 0 clamp(18px, 3vw, 48px); display: flex; align-items: stretch; gap: 20px; overflow-x: auto; scrollbar-width: none; background: var(--keel); }
 .top-navigation::-webkit-scrollbar { display: none; }
 .top-nav-primary, .top-nav-utility { display: flex; align-items: stretch; flex: none; }
@@ -98,6 +100,12 @@ button:disabled { cursor: not-allowed; opacity: .46; }
 .top-nav-utility a[data-status="active"]::after { background: var(--nav-utility-active); }
 
 .workbench { min-width: 0; background: var(--mist-100); }
+.auth-screen { min-height: 100vh; padding: 24px; display: grid; place-items: center; background: var(--keel-deep); }
+.auth-screen section { width: min(480px, 100%); padding: 34px; color: #dce7e6; background: var(--keel); border-top: 3px solid var(--copper); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+.auth-screen span { color: var(--brass-500); font: 10px var(--font-data); letter-spacing: .14em; }
+.auth-screen h1 { margin-top: 12px; color: #fff; }
+.auth-screen p { margin: 16px 0 22px; color: #a8b9ba; line-height: 1.6; }
+.auth-screen code { display: block; margin-top: 18px; color: #e9a4a7; overflow-wrap: anywhere; }
 
 .workspace { width: 100%; min-width: 0; max-width: 1720px; margin: 0 auto; padding: 30px clamp(20px, 3vw, 48px) 68px; }
 .page-header { min-height: 92px; display: flex; justify-content: space-between; align-items: flex-start; gap: 28px; border-bottom: 1px solid var(--line-strong); }

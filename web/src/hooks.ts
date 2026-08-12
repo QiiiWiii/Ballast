@@ -1,13 +1,22 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { api } from "./api";
+import type { AuthConfig } from "./auth/config";
+
 export const EventStreamStatusContext = createContext(false);
 
 export function useEventStreamStatus(): boolean {
   return useContext(EventStreamStatusContext);
 }
 
-export function useEventStream(): boolean {
+export async function createEventSocket(config: AuthConfig, url: string): Promise<WebSocket> {
+  if (config.mode === "open") return new WebSocket(url);
+  const { ticket } = await api.wsTicket();
+  return new WebSocket(url, ["ballast-ticket", `ballast-ticket-value.${ticket}`]);
+}
+
+export function useEventStream(config: AuthConfig): boolean {
   const queryClient = useQueryClient();
   const [connected, setConnected] = useState(false);
   const lastSequence = useRef<number | undefined>(undefined);
@@ -39,7 +48,7 @@ export function useEventStream(): boolean {
       }, 120);
     };
 
-    const connect = () => {
+    const connect = async () => {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       if (lastSequence.current === undefined) {
         const rawStored = sessionStorage.getItem("ballast-event-sequence");
@@ -47,7 +56,17 @@ export function useEventStream(): boolean {
         if (Number.isSafeInteger(stored) && stored >= 0) lastSequence.current = stored;
       }
       const cursor = lastSequence.current === undefined ? "" : `?after_sequence=${lastSequence.current}`;
-      socket = new WebSocket(`${protocol}//${location.host}/api/v1/ws${cursor}`);
+      try {
+        socket = await createEventSocket(config, `${protocol}//${location.host}/api/v1/ws${cursor}`);
+      } catch {
+        setConnected(false);
+        if (!stopped) {
+          attempt += 1;
+          retry = window.setTimeout(() => void connect(), Math.min(1_000 * 2 ** attempt, 15_000));
+        }
+        return;
+      }
+      if (stopped) { socket.close(); return; }
       socket.onopen = () => { attempt = 0; setConnected(true); };
       socket.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as { type?: string; data?: { sequence?: number; after_sequence?: number } };
@@ -63,18 +82,18 @@ export function useEventStream(): boolean {
         setConnected(false);
         if (!stopped) {
           attempt += 1;
-          retry = window.setTimeout(connect, Math.min(1_000 * 2 ** attempt, 15_000));
+          retry = window.setTimeout(() => void connect(), Math.min(1_000 * 2 ** attempt, 15_000));
         }
       };
     };
-    connect();
+    void connect();
     return () => {
       stopped = true;
       if (retry !== undefined) window.clearTimeout(retry);
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       socket?.close();
     };
-  }, [queryClient]);
+  }, [config, queryClient]);
 
   return connected;
 }

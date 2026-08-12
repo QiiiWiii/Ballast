@@ -58,11 +58,12 @@
 
 #### P0.1 身份与权限
 
-状态：进行中（`feat/p0-oidc`：服务端 JWT/角色/WS ticket 已落地；前端登录与 PKCE 待接）
+状态：实现完成，待接入目标 OIDC provider 做端到端验收
 
 - OIDC discovery / JWKS 验签；`iss` / `aud` / 时钟偏移校验
 - 角色：`viewer` / `operator` / `admin`（与 ADR 0003 审批分工一致）
 - HTTP Bearer；WebSocket 单次 ticket，消费后失效
+- Web Authorization Code + PKCE；浏览器会话仅存 `sessionStorage`
 - 未认证请求不得访问任务写路径与任何私有平面接口
 
 验收：错误登录被拒；角色矩阵有自动化测试；ticket 不可重放。

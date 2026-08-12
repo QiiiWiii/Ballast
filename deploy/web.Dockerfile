@@ -8,5 +8,6 @@ RUN npm run build
 
 FROM nginx:1.29-alpine
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/web-entrypoint.sh /docker-entrypoint.d/40-ballast-config.sh
 COPY --from=builder /app/web/dist /usr/share/nginx/html
 EXPOSE 80

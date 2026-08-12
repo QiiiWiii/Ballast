@@ -13,13 +13,21 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AppShell } from "./components";
+import { AuthGate, AuthProvider, resolveAuthConfig } from "./auth";
 import {
   AccountsPage, AnalyticsPage, ApprovalsPage, ControlRoomPage, CreateExecutionPage,
   ExecutionDetailPage, ExecutionsPage, HedgingPage, RiskPage, RoadmapPage, StrategiesPage,
   StrategyDetailPage, SystemPage, VenueDetailPage, VenuesPage,
 } from "./pages";
 
-const rootRoute = createRootRoute({ component: AppShell });
+const authResolution = (() => {
+  try {
+    return { config: resolveAuthConfig(), error: undefined };
+  } catch (error) {
+    return { config: undefined, error: error instanceof Error ? error.message : "invalid_auth_configuration" };
+  }
+})();
+const rootRoute = createRootRoute({ component: () => authResolution.config ? <AppShell authConfig={authResolution.config} /> : null });
 const controlRoomRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: ControlRoomPage });
 const executionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/executions", component: ExecutionsPage });
 const createExecutionRoute = createRoute({
@@ -51,4 +59,7 @@ declare module "@tanstack/react-router" { interface Register { router: typeof ro
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 3_000, retry: 1 } } });
 const root = document.getElementById("root");
 if (!root) throw new Error("root element is missing");
-createRoot(root).render(<StrictMode><QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider></StrictMode>);
+createRoot(root).render(<StrictMode>{authResolution.config
+  ? <AuthProvider config={authResolution.config}><AuthGate><QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider></AuthGate></AuthProvider>
+  : <main className="auth-screen" role="alert"><section><span>OIDC / CONFIGURATION</span><h1>Authentication configuration is invalid</h1><p>Ballast is blocked because the public OIDC issuer and client ID must be configured together.</p><code>{authResolution.error}</code></section></main>
+}</StrictMode>);

@@ -13,3 +13,5 @@ npm run check
 ```
 
 开发服务器把 `/api` 和 `/health` 代理到 `http://localhost:8080`。界面不使用模拟业务数据；后端不可用时会显示明确错误。
+
+默认未配置 OIDC 时保持 paper/open 模式。本地启用登录需同时设置 `VITE_BALLAST_OIDC_ISSUER`、`VITE_BALLAST_OIDC_CLIENT_ID`，并按 provider 要求设置可选的 `VITE_BALLAST_OIDC_AUDIENCE`。redirect URI 固定为 `http://localhost:5173/auth/callback`。

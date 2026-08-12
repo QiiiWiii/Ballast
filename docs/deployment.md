@@ -9,7 +9,7 @@
 ```bash
 cp .env.example .env
 # 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN
-# 只有在 Web UI 已接入 OIDC 后才设置 BALLAST_OIDC_ISSUER/AUDIENCE
+# 启用认证时同时设置 BALLAST_OIDC_ISSUER/AUDIENCE/CLIENT_ID
 # 生产建议固定：BALLAST_IMAGE_TAG=sha-<short>
 docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
@@ -67,7 +67,8 @@ CI 为每个 tag 推送 **multi-arch manifest**（`linux/amd64` + `linux/arm64`�
 
 ## 生产前仍需完成
 
-- Web UI 的 OIDC 登录/PKCE、Bearer 注入和 WebSocket ticket 流程。
+Web 镜像在容器启动时写入公开 OIDC 运行时配置，同一镜像可用于不同 issuer，无需重新构建。OIDC 客户端必须把 `${BALLAST_PUBLIC_ORIGIN}/auth/callback` 注册为 redirect URI，并把 `${BALLAST_PUBLIC_ORIGIN}/` 注册为 post-logout redirect URI。
+
 - 生产环境启用 OIDC；未配置时仅适合纸面研究和内部验证。
 - 内部 RPC 身份认证/加密或等价服务网格策略。
 - 按交易所拆分私有账户网关。

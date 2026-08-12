@@ -53,10 +53,13 @@ impl AuthState {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "ballast_roles".to_owned());
-        let clock_skew_secs = std::env::var("BALLAST_OIDC_CLOCK_SKEW_SECS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(60);
+        let clock_skew_secs = match std::env::var("BALLAST_OIDC_CLOCK_SKEW_SECS") {
+            Ok(value) => parse_clock_skew_secs(&value)?,
+            Err(std::env::VarError::NotPresent) => 60,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err("BALLAST_OIDC_CLOCK_SKEW_SECS must be an unsigned integer".into());
+            }
+        };
         let tickets = TicketService::new(database);
 
         match (issuer, audience) {
@@ -94,6 +97,13 @@ impl AuthState {
             AuthMode::Oidc => "configured",
         }
     }
+}
+
+fn parse_clock_skew_secs(value: &str) -> Result<u64, String> {
+    value
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "BALLAST_OIDC_CLOCK_SKEW_SECS must be an unsigned integer".to_owned())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -282,5 +292,13 @@ mod tests {
         );
         let error = ws_ticket_from_headers(&headers).unwrap_err();
         assert_eq!(error.code(), "ws_ticket_required");
+    }
+
+    #[test]
+    fn rejects_invalid_clock_skew() {
+        assert_eq!(parse_clock_skew_secs("30").unwrap(), 30);
+        assert!(parse_clock_skew_secs("").is_err());
+        assert!(parse_clock_skew_secs("-1").is_err());
+        assert!(parse_clock_skew_secs("seconds").is_err());
     }
 }

@@ -198,6 +198,34 @@ pub async fn get_child_order_by_client_order_id(
     .transpose()
 }
 
+pub async fn list_account_open_orders(
+    pool: &DatabasePool,
+    account_id: &str,
+    exchange: &str,
+) -> Result<Vec<StoredChildOrder>, sqlx::Error> {
+    if account_id.trim().is_empty() || exchange.trim().is_empty() {
+        return Err(protocol_error("child_order_account_scope_invalid"));
+    }
+    let rows = sqlx::query(
+        r#"
+        SELECT *
+        FROM child_orders
+        WHERE account_id = $1
+          AND exchange = $2
+          AND status IN (
+              'submission_pending', 'submission_unknown', 'open',
+              'partially_filled', 'cancel_pending'
+          )
+        ORDER BY created_at, id
+        "#,
+    )
+    .bind(account_id)
+    .bind(exchange)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_child_order).collect()
+}
+
 pub async fn claim_child_orders_for_reconciliation(
     pool: &DatabasePool,
     limit: i64,

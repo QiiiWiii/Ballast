@@ -1,4 +1,6 @@
 use axum::{Json, extract::State};
+use ballast_storage::{StoredAccount, StoredReconciliationRun};
+use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -76,6 +78,69 @@ pub(super) async fn live_readiness(State(state): State<AppState>) -> Json<Value>
             "production_switch"
         ]
     }))
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct AccountView {
+    id: String,
+    exchange: String,
+    label: String,
+    environment: String,
+    enabled: bool,
+    withdrawals_disabled: bool,
+    ip_restricted: bool,
+    latest_reconciliation: Option<ReconciliationStatusView>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReconciliationStatusView {
+    id: uuid::Uuid,
+    status: String,
+    difference_count: i32,
+    failure_code: Option<String>,
+    started_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+}
+
+pub(super) async fn list_accounts(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<AccountView>>> {
+    let accounts = ballast_storage::list_accounts(&state.database)
+        .await
+        .map_err(ApiError::database)?;
+    let latest_runs = join_all(accounts.iter().map(|account| {
+        ballast_storage::list_recent_reconciliation_runs(&state.database, &account.id, 1)
+    }))
+    .await;
+    let mut result = Vec::with_capacity(accounts.len());
+    for (account, runs) in accounts.into_iter().zip(latest_runs) {
+        let latest_reconciliation = runs.map_err(ApiError::database)?.into_iter().next();
+        result.push(account_view(account, latest_reconciliation));
+    }
+    Ok(Json(result))
+}
+
+fn account_view(
+    account: StoredAccount,
+    latest_reconciliation: Option<StoredReconciliationRun>,
+) -> AccountView {
+    AccountView {
+        id: account.id,
+        exchange: account.exchange,
+        label: account.label,
+        environment: account.environment,
+        enabled: account.enabled,
+        withdrawals_disabled: account.withdrawals_disabled,
+        ip_restricted: account.ip_restricted,
+        latest_reconciliation: latest_reconciliation.map(|run| ReconciliationStatusView {
+            id: run.id,
+            status: run.status,
+            difference_count: run.difference_count,
+            failure_code: run.failure_code,
+            started_at: run.started_at,
+            completed_at: run.completed_at,
+        }),
+    }
 }
 
 pub(super) async fn private_plane_locked() -> ApiResult<Json<Value>> {

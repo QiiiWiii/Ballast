@@ -204,6 +204,27 @@ async fn child_order_intent_and_state_convergence_are_atomic() {
     .await
     .unwrap();
     assert_eq!(unknown_order.status, OrderState::SubmissionUnknown);
+    let account_open_orders = ballast_storage::list_account_open_orders(&pool, &account_id, "okx")
+        .await
+        .unwrap();
+    assert_eq!(account_open_orders.len(), 1);
+    assert_eq!(account_open_orders[0].id, created_order.id);
+    sqlx::query("UPDATE child_orders SET exchange = 'binance' WHERE id = $1")
+        .bind(created_order.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        ballast_storage::list_account_open_orders(&pool, &account_id, "okx")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    sqlx::query("UPDATE child_orders SET exchange = 'okx' WHERE id = $1")
+        .bind(created_order.id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let claim = ballast_storage::claim_child_orders_for_reconciliation(
         &pool,
         10,

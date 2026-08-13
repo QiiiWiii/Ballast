@@ -41,7 +41,7 @@ services:
       DATABASE_URL: postgres://ballast:${POSTGRES_PASSWORD:-ballast-local-only}@postgres:5432/ballast
       RUST_LOG: ${RUST_LOG:-ballast_server=info,tower_http=info}
       BALLAST_LIVE_ENABLED: "false"
-      BALLAST_ORDER_RECONCILIATION_ENABLED: "false"
+      BALLAST_PRIVATE_RECONCILIATION_ENABLED: "false"
       BALLAST_OIDC_ISSUER: ${BALLAST_OIDC_ISSUER:-}
       BALLAST_OIDC_AUDIENCE: ${BALLAST_OIDC_AUDIENCE:-}
       BALLAST_OIDC_ROLE_CLAIM: ${BALLAST_OIDC_ROLE_CLAIM:-ballast_roles}

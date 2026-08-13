@@ -79,7 +79,9 @@
 
 Web 部署同时配置 `BALLAST_OIDC_CLIENT_ID` 后使用 Authorization Code + PKCE。OIDC provider 需注册 `${BALLAST_PUBLIC_ORIGIN}/auth/callback` 为 redirect URI，并注册 `${BALLAST_PUBLIC_ORIGIN}/` 为 post-logout redirect URI。浏览器每次 WebSocket 建连或重连都会重新领取 ticket。
 
-原生算法能力接口只返回经过研究的能力状态。`documented_not_validated` 不代表可提交。OIDC 和私有对账完成前，账户、审批、风险和对冲接口统一返回 HTTP 423 与 `live_execution_disabled`。
+原生算法能力接口只返回经过研究的能力状态。`documented_not_validated` 不代表可提交。
+
+`GET /api/v1/accounts` 已开放只读账户元数据和最近一次对账状态，不返回凭证名、余额、持仓或订单明细。OIDC 模式下至少需要 `viewer`；开放 paper 模式沿用现有开放读取行为。审批、风险和对冲接口仍返回 HTTP 423 与 `live_execution_disabled`。
 
 ## 控制舱与分析
 

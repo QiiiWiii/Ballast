@@ -76,7 +76,7 @@ pub fn routes() -> Router<AppState> {
             get(live::native_algorithm_capabilities),
         )
         .route("/api/v1/live/readiness", get(live::live_readiness))
-        .route("/api/v1/accounts", get(live::private_plane_locked))
+        .route("/api/v1/accounts", get(live::list_accounts))
         .route("/api/v1/approvals", get(live::private_plane_locked))
         .route("/api/v1/risk", get(live::private_plane_locked))
         .route("/api/v1/hedges", get(live::private_plane_locked))

@@ -15,6 +15,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod account_reconciliation_worker;
 mod api;
 mod auth;
 mod execution_worker;
@@ -69,10 +70,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         order_books,
         metrics.clone(),
     );
-    if order_reconciliation_enabled()? {
+    if private_reconciliation_enabled()? {
+        account_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
         order_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
     } else {
-        info!("private order reconciliation worker is disabled");
+        info!("private reconciliation workers are disabled");
     }
 
     let cors_origin = std::env::var("BALLAST_CORS_ORIGIN")
@@ -113,8 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn order_reconciliation_enabled() -> Result<bool, Box<dyn std::error::Error>> {
-    let value = std::env::var("BALLAST_ORDER_RECONCILIATION_ENABLED").ok();
+fn private_reconciliation_enabled() -> Result<bool, Box<dyn std::error::Error>> {
+    let value = std::env::var("BALLAST_PRIVATE_RECONCILIATION_ENABLED").ok();
     parse_enabled_flag(value.as_deref()).map_err(Into::into)
 }
 
@@ -122,7 +124,7 @@ fn parse_enabled_flag(value: Option<&str>) -> Result<bool, &'static str> {
     match value {
         None | Some("false") => Ok(false),
         Some("true") => Ok(true),
-        Some(_) => Err("BALLAST_ORDER_RECONCILIATION_ENABLED must be true or false"),
+        Some(_) => Err("BALLAST_PRIVATE_RECONCILIATION_ENABLED must be true or false"),
     }
 }
 

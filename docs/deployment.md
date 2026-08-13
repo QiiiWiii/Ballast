@@ -33,7 +33,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
 
 账户密钥必须只读、禁用提现并绑定允许 IP。当前 overlay 仅开放余额、线性永续仓位和普通未结订单的 `AccountService.GetAccountSnapshot`；反向永续、缺失稳定 `client_order_id` 的订单、条件或算法订单、下单、撤单和私有流仍失败关闭。
 
-private overlay 同时显式启用本地非终态订单查询 worker。默认 paper Compose 将 `BALLAST_ORDER_RECONCILIATION_ENABLED` 固定为 `false`，不调用任何私有 RPC。
+private overlay 同时显式启用账户快照和本地非终态订单查询 worker。默认 paper Compose 将 `BALLAST_PRIVATE_RECONCILIATION_ENABLED` 固定为 `false`，不调用任何私有 RPC。
 
 配置只读账户后，可直接在 Gateway 容器内运行只读验收。该命令只调用 `AccountService.GetAccountSnapshot`，输出余额、仓位和未结订单数量，不输出金额或凭证：
 

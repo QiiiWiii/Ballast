@@ -8,7 +8,7 @@ services:
       - ballast_okx_accounts
   server:
     environment:
-      BALLAST_ORDER_RECONCILIATION_ENABLED: "true"
+      BALLAST_PRIVATE_RECONCILIATION_ENABLED: "true"
 
 secrets:
   ballast_okx_accounts:

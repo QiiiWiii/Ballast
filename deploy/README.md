@@ -100,6 +100,7 @@ private overlay 会将 `BALLAST_PRIVATE_RECONCILIATION_ENABLED=true`，用于读
 | `BALLAST_OIDC_AUDIENCE` | 空 | API access token audience |
 | `BALLAST_OIDC_CLIENT_ID` | 空 | Web Authorization Code + PKCE 公共客户端 ID |
 | `BALLAST_PRIVATE_RECONCILIATION_ENABLED` | `false` | 仅 private overlay 启用账户快照和本地已知订单查询 worker |
+| `BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL` | 空 | 可选 HTTPS 告警接收端；只发送账户、交易所、运行 ID、差异数量和类型摘要 |
 
 ## CI 发布
 
@@ -111,4 +112,5 @@ private overlay 会将 `BALLAST_PRIVATE_RECONCILIATION_ENABLED=true`，用于读
 ## 安全说明
 
 交易所凭证只能通过 `deploy/compose.private.yaml` 挂载的 secret 文件提供，不得放入 `.env`、日志或数据库。
+对账 webhook 只发送脱敏摘要，不包含余额、持仓、订单明细、API Key 或响应体；发送失败通过 outbox 退避重试，超过上限后标记失败。
 `BALLAST_LIVE_ENABLED` 固定为 `false`。

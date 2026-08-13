@@ -79,6 +79,8 @@
 
 Web 部署同时配置 `BALLAST_OIDC_CLIENT_ID` 后使用 Authorization Code + PKCE。OIDC provider 需注册 `${BALLAST_PUBLIC_ORIGIN}/auth/callback` 为 redirect URI，并注册 `${BALLAST_PUBLIC_ORIGIN}/` 为 post-logout redirect URI。浏览器每次 WebSocket 建连或重连都会重新领取 ticket。
 
+配置 `BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL` 后，对账差异会通过 HTTPS webhook 发送脱敏摘要。载荷只包含版本、事件、账户标识、交易所、对账运行 ID、差异数量和差异类型集合，不包含余额、持仓、订单明细、凭证或 webhook 响应体；同一账户未变化的差异不会重复入队。
+
 原生算法能力接口只返回经过研究的能力状态。`documented_not_validated` 不代表可提交。
 
 `GET /api/v1/accounts` 已开放只读账户元数据和最近一次对账状态，不返回凭证名、余额、持仓或订单明细。OIDC 模式下至少需要 `viewer`；开放 paper 模式沿用现有开放读取行为。审批、风险和对冲接口仍返回 HTTP 423 与 `live_execution_disabled`。

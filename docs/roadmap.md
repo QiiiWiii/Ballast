@@ -83,13 +83,13 @@ OIDC / RBAC 已实现并可选启用；公开 paper 模式可留空，目标 pro
 
 #### P0.3 对账与不确定订单
 
-状态：进行中（Rust 订单状态机、稳定 `client_order_id`、原子持久化、OKX 查询适配器、逐单周期对账和账户级 open-order 差异已实现；差异告警待接）
+状态：进行中（Rust 订单状态机、稳定 `client_order_id`、原子持久化、OKX 查询适配器、逐单周期对账、账户级 open-order 差异和脱敏 webhook 告警已实现；unknown 订单及其它关键路径告警待接）
 
 - 稳定 `client_order_id` 生成与持久化
 - 下单超时 / 网络中断 → `submission_unknown`，禁止盲目重试
 - 查询适配器：按 client id / exchange id 收敛到终态或可审计挂起
 - [x] 启动与周期对账：持久化本地 open 订单 vs 交易所 open 订单差异
-- [ ] 对账差异接入明确的告警接收端
+- [x] 对账差异接入明确的 HTTPS webhook 告警接收端；仅发送脱敏摘要，支持 outbox 去重、租约和退避重试
 
 验收：模拟超时用例进入 unknown 并完成对账；无“再发一笔相同意图却不查证”的路径。
 

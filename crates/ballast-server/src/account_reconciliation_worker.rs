@@ -16,7 +16,11 @@ use uuid::Uuid;
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_CONCURRENT_ACCOUNTS: usize = 4;
 
-pub fn spawn_worker(database: DatabasePool, gateway: GatewayClient) {
+pub fn spawn_worker(
+    database: DatabasePool,
+    gateway: GatewayClient,
+    reconciliation_alerts_enabled: bool,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(POLL_INTERVAL);
         loop {
@@ -28,7 +32,14 @@ pub fn spawn_worker(database: DatabasePool, gateway: GatewayClient) {
                             let database = database.clone();
                             let gateway = gateway.clone();
                             async move {
-                                if let Err(error) = reconcile_account(&database, &gateway, &account).await {
+                                if let Err(error) = reconcile_account(
+                                    &database,
+                                    &gateway,
+                                    &account,
+                                    reconciliation_alerts_enabled,
+                                )
+                                .await
+                                {
                                     warn!(account_id = %account.id, %error, "account reconciliation failed");
                                 }
                             }
@@ -47,6 +58,7 @@ async fn reconcile_account(
     database: &DatabasePool,
     gateway: &GatewayClient,
     account: &StoredAccount,
+    reconciliation_alerts_enabled: bool,
 ) -> Result<(), String> {
     let mut lock_transaction = database.begin().await.map_err(|error| error.to_string())?;
     let claimed: bool =
@@ -58,7 +70,8 @@ async fn reconcile_account(
     if !claimed {
         return Ok(());
     }
-    let result = reconcile_claimed_account(database, gateway, account).await;
+    let result =
+        reconcile_claimed_account(database, gateway, account, reconciliation_alerts_enabled).await;
     if let Err(code) = result {
         if let Err(error) = record_failed_account_reconciliation(database, &account.id, code).await
         {
@@ -76,6 +89,7 @@ async fn reconcile_claimed_account(
     database: &DatabasePool,
     gateway: &GatewayClient,
     account: &StoredAccount,
+    reconciliation_alerts_enabled: bool,
 ) -> Result<(), &'static str> {
     let account_ref = account_ref(account)?;
     let local_orders_before = local_order_summaries(database, account).await?;
@@ -106,6 +120,7 @@ async fn reconcile_claimed_account(
             observed_at,
         },
         &local_orders_before,
+        reconciliation_alerts_enabled,
     )
     .await
     .map_err(|_| "account_reconciliation_persist_failed")?;

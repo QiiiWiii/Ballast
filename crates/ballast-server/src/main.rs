@@ -22,6 +22,8 @@ mod execution_worker;
 mod metrics;
 mod order_book_cache;
 mod order_reconciliation_worker;
+mod reconciliation_alert_config;
+mod reconciliation_alert_worker;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -61,6 +63,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gateway = GatewayClient::connect(gateway_endpoint).await?;
     let metrics = metrics::AppMetrics::new()?;
     let auth = auth::AuthState::from_env(database.clone())?;
+    let reconciliation_alert_config =
+        reconciliation_alert_config::ReconciliationAlertConfig::from_env()
+            .map_err(|error| format!("invalid reconciliation alert configuration: {error}"))?;
+    if let Some(config) = reconciliation_alert_config.clone() {
+        reconciliation_alert_worker::spawn_worker(database.clone(), config);
+    } else {
+        info!("reconciliation alert webhooks are disabled");
+    }
     let trade_volume = execution_worker::TradeVolumeTracker::default();
     let order_books = order_book_cache::OrderBookCache::default();
     execution_worker::spawn_worker(
@@ -71,7 +81,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics.clone(),
     );
     if private_reconciliation_enabled()? {
-        account_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
+        account_reconciliation_worker::spawn_worker(
+            database.clone(),
+            gateway.clone(),
+            reconciliation_alert_config.is_some(),
+        );
         order_reconciliation_worker::spawn_worker(database.clone(), gateway.clone());
     } else {
         info!("private reconciliation workers are disabled");

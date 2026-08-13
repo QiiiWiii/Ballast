@@ -2,6 +2,7 @@
 
 use sqlx::postgres::PgPoolOptions;
 
+mod alert_repository;
 mod historical_repository;
 mod instrument_repository;
 mod live_repository;
@@ -9,6 +10,10 @@ mod order_repository;
 mod strategy_repository;
 mod task_repository;
 
+pub use alert_repository::{
+    ClaimedReconciliationWebhook, ReconciliationWebhookPayload, claim_reconciliation_webhooks,
+    complete_reconciliation_webhook, fail_reconciliation_webhook, retry_reconciliation_webhook,
+};
 pub use historical_repository::{
     HistoricalCandle, HistoricalTrade, NewHistoricalBackfill, StoredHistoricalBackfill,
     create_or_get_historical_backfill, get_historical_backfill, list_historical_candles,

@@ -10,6 +10,7 @@
 cp .env.example .env
 # 修改 POSTGRES_PASSWORD、BALLAST_PUBLIC_ORIGIN
 # 启用认证时同时设置 BALLAST_OIDC_ISSUER/AUDIENCE/CLIENT_ID
+# 可选：BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL=https://alerts.example.test/ballast
 # 生产建议固定：BALLAST_IMAGE_TAG=sha-<short>
 docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
@@ -102,6 +103,7 @@ BALLAST_SMOKE_BASE_URL="${BALLAST_PUBLIC_ORIGIN}" make paper-smoke
 Web 镜像在容器启动时写入公开 OIDC 运行时配置，同一镜像可用于不同 issuer，无需重新构建。OIDC 客户端必须把 `${BALLAST_PUBLIC_ORIGIN}/auth/callback` 注册为 redirect URI，并把 `${BALLAST_PUBLIC_ORIGIN}/` 注册为 post-logout redirect URI。
 
 - 生产环境启用 OIDC；未配置时仅适合纸面研究和内部验证。
+- 对账差异 webhook 只接受 HTTPS；未配置时仍持久化对账事实，但不发起告警网络请求。
 - 内部 RPC 身份认证/加密或等价服务网格策略。
 - 扩展到 OKX 之外的单交易所私有账户适配器。
-- 交易限额、kill switch、订单对账和告警接收端。
+- 交易限额、kill switch 和完整 live 执行闭环；对账差异 webhook 已实现，但仍需在受控环境完成接收端演练。

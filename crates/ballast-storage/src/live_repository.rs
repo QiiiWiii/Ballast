@@ -7,6 +7,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::DatabasePool;
+use crate::alert_repository::{clear_reconciliation_alert_state, enqueue_reconciliation_alert};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredAccount {
@@ -118,6 +119,7 @@ pub async fn record_account_reconciliation(
     pool: &DatabasePool,
     snapshot: NewAccountSnapshot,
     local_open_orders: &[LocalOpenOrderSummary],
+    reconciliation_alerts_enabled: bool,
 ) -> Result<StoredAccountReconciliation, sqlx::Error> {
     validate_snapshot(&snapshot)?;
     let external_orders = order_states_from_snapshot(&snapshot.open_orders)?;
@@ -125,7 +127,7 @@ pub async fn record_account_reconciliation(
     let new_differences = compare_order_states(&external_orders, &local_orders);
 
     let mut transaction = pool.begin().await?;
-    let account = sqlx::query("SELECT exchange, enabled FROM accounts WHERE id = $1 FOR SHARE")
+    let account = sqlx::query("SELECT exchange, enabled FROM accounts WHERE id = $1 FOR UPDATE")
         .bind(&snapshot.account_id)
         .fetch_optional(&mut *transaction)
         .await?;
@@ -186,7 +188,7 @@ pub async fn record_account_reconciliation(
     .await?;
 
     let mut differences = Vec::with_capacity(new_differences.len());
-    for difference in new_differences {
+    for difference in &new_differences {
         let row = sqlx::query(
             r#"
             INSERT INTO reconciliation_differences (
@@ -211,6 +213,28 @@ pub async fn record_account_reconciliation(
         run: row_to_reconciliation_run(&run_row)?,
         differences,
     };
+    if new_differences.is_empty() {
+        clear_reconciliation_alert_state(&mut transaction, &snapshot.account_id).await?;
+    } else if reconciliation_alerts_enabled {
+        let difference_types = new_differences
+            .iter()
+            .map(|difference| difference.difference_type.to_owned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        enqueue_reconciliation_alert(
+            &mut transaction,
+            &snapshot.account_id,
+            &snapshot.exchange,
+            run_id,
+            &differences_json,
+            difference_count,
+            &difference_types,
+        )
+        .await?;
+    } else {
+        clear_reconciliation_alert_state(&mut transaction, &snapshot.account_id).await?;
+    }
     transaction.commit().await?;
     Ok(stored)
 }

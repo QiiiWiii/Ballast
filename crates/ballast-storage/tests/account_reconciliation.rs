@@ -73,6 +73,7 @@ async fn account_reconciliation_is_atomic_historical_and_queryable() {
         &pool,
         snapshot(&account_id, "okx"),
         &local_orders(),
+        false,
     )
     .await
     .unwrap();
@@ -113,6 +114,7 @@ async fn account_reconciliation_is_atomic_historical_and_queryable() {
         &pool,
         snapshot(&account_id, "okx"),
         &local_orders(),
+        false,
     )
     .await
     .unwrap();
@@ -150,6 +152,7 @@ async fn account_reconciliation_is_atomic_historical_and_queryable() {
             client_order_id: "matched".to_owned(),
             state: "open".to_owned(),
         }],
+        false,
     )
     .await
     .unwrap();
@@ -192,6 +195,7 @@ async fn account_reconciliation_rejects_invalid_scope_and_rolls_back() {
         &pool,
         snapshot(&disabled_account_id, "okx"),
         &local_orders(),
+        false,
     )
     .await
     .unwrap_err();
@@ -210,6 +214,7 @@ async fn account_reconciliation_rejects_invalid_scope_and_rolls_back() {
         &pool,
         snapshot(&disabled_account_id, "binance"),
         &local_orders(),
+        false,
     )
     .await
     .unwrap_err();
@@ -229,6 +234,7 @@ async fn account_reconciliation_rejects_invalid_scope_and_rolls_back() {
             ..snapshot(&disabled_account_id, "okx")
         },
         &[],
+        false,
     )
     .await
     .unwrap_err();
@@ -245,6 +251,7 @@ async fn account_reconciliation_rejects_invalid_scope_and_rolls_back() {
             ..snapshot(&disabled_account_id, "okx")
         },
         &local_orders(),
+        false,
     )
     .await
     .unwrap_err();
@@ -261,6 +268,7 @@ async fn account_reconciliation_rejects_invalid_scope_and_rolls_back() {
             ..snapshot(&disabled_account_id, "okx")
         },
         &local_orders(),
+        false,
     )
     .await
     .unwrap_err();
@@ -297,4 +305,159 @@ async fn account_reconciliation_rejects_invalid_scope_and_rolls_back() {
             .to_string()
             .contains("reconciliation_account_not_enabled")
     );
+}
+
+#[tokio::test]
+async fn reconciliation_alerts_are_deduplicated_and_retried() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("TEST_DATABASE_URL is not set; skipping PostgreSQL integration test");
+        return;
+    };
+    let pool = ballast_storage::connect(&database_url).await.unwrap();
+    ballast_storage::migrate(&pool).await.unwrap();
+    let suffix = Utc::now().timestamp_nanos_opt().unwrap();
+    let account_id = create_account(&pool, suffix, true).await;
+
+    let first = ballast_storage::record_account_reconciliation(
+        &pool,
+        snapshot(&account_id, "okx"),
+        &local_orders(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.run.difference_count, 3);
+
+    let outbox_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_commands WHERE command_type = 'reconciliation_difference_webhook' AND payload->>'account_id' = $1",
+    )
+    .bind(&account_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(outbox_count, 1);
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM outbox_commands WHERE command_type = 'reconciliation_difference_webhook' AND payload->>'account_id' = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&account_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(payload["account_id"].as_str(), Some(account_id.as_str()));
+    assert_eq!(payload["difference_count"], 3);
+    assert!(payload.get("expected").is_none());
+    assert!(payload.get("observed").is_none());
+    assert!(
+        serde_json::to_string(&payload)
+            .unwrap()
+            .contains("order_state_mismatch")
+    );
+    assert!(
+        !serde_json::to_string(&payload)
+            .unwrap()
+            .contains("external-only")
+    );
+
+    ballast_storage::record_account_reconciliation(
+        &pool,
+        snapshot(&account_id, "okx"),
+        &local_orders(),
+        true,
+    )
+    .await
+    .unwrap();
+    let deduplicated_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_commands WHERE command_type = 'reconciliation_difference_webhook' AND payload->>'account_id' = $1",
+    )
+    .bind(&account_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(deduplicated_count, 1);
+
+    let claimed = ballast_storage::claim_reconciliation_webhooks(
+        &pool,
+        4,
+        Utc::now() + chrono::Duration::seconds(30),
+    )
+    .await
+    .unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].attempts, 1);
+    let second_claim = ballast_storage::claim_reconciliation_webhooks(
+        &pool,
+        4,
+        Utc::now() + chrono::Duration::seconds(30),
+    )
+    .await
+    .unwrap();
+    assert!(second_claim.is_empty());
+
+    assert!(
+        ballast_storage::retry_reconciliation_webhook(
+            &pool,
+            claimed[0].id,
+            claimed[0].claim_token,
+            Utc::now(),
+            "webhook_http_503",
+        )
+        .await
+        .unwrap()
+    );
+    let retry_claim = ballast_storage::claim_reconciliation_webhooks(
+        &pool,
+        4,
+        Utc::now() + chrono::Duration::seconds(30),
+    )
+    .await
+    .unwrap();
+    assert_eq!(retry_claim.len(), 1);
+    assert_eq!(retry_claim[0].attempts, 2);
+    assert!(
+        ballast_storage::complete_reconciliation_webhook(
+            &pool,
+            retry_claim[0].id,
+            retry_claim[0].claim_token,
+        )
+        .await
+        .unwrap()
+    );
+
+    let status: String = sqlx::query_scalar("SELECT status FROM outbox_commands WHERE id = $1")
+        .bind(retry_claim[0].id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "completed");
+
+    ballast_storage::record_account_reconciliation(
+        &pool,
+        NewAccountSnapshot {
+            open_orders: json!([{ "client_order_id": "matched", "state": "open" }]),
+            ..snapshot(&account_id, "okx")
+        },
+        &[LocalOpenOrderSummary {
+            client_order_id: "matched".to_owned(),
+            state: "open".to_owned(),
+        }],
+        true,
+    )
+    .await
+    .unwrap();
+    ballast_storage::record_account_reconciliation(
+        &pool,
+        snapshot(&account_id, "okx"),
+        &local_orders(),
+        true,
+    )
+    .await
+    .unwrap();
+    let recurring_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbox_commands WHERE command_type = 'reconciliation_difference_webhook' AND payload->>'account_id' = $1",
+    )
+    .bind(&account_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(recurring_count, 2);
 }

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -44,6 +44,39 @@ pub struct StoredRiskDecision {
     pub code: String,
     pub inputs: Value,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredKillSwitch {
+    pub scope_type: String,
+    pub scope_id: String,
+    pub enabled: bool,
+    pub reason: String,
+    pub changed_by: String,
+    pub changed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredRiskLimit {
+    pub id: Uuid,
+    pub scope_type: String,
+    pub scope_id: String,
+    pub allowed_exchanges: Value,
+    pub allowed_accounts: Value,
+    pub allowed_instruments: Value,
+    pub allowed_backends: Value,
+    pub max_order_notional: rust_decimal::Decimal,
+    pub max_task_notional: rust_decimal::Decimal,
+    pub max_daily_notional: rust_decimal::Decimal,
+    pub max_active_tasks: i32,
+    pub max_slippage_bps: i32,
+    pub max_market_age_ms: i64,
+    pub max_account_age_ms: i64,
+    pub max_net_exposure: rust_decimal::Decimal,
+    pub max_native_algo_orders: i32,
+    pub max_native_duration_seconds: i64,
+    pub updated_by: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +350,62 @@ pub async fn list_accounts(pool: &DatabasePool) -> Result<Vec<StoredAccount>, sq
     rows.iter().map(row_to_account).collect()
 }
 
+pub async fn get_account(
+    pool: &DatabasePool,
+    account_id: &str,
+) -> Result<Option<StoredAccount>, sqlx::Error> {
+    if account_id.trim().is_empty() {
+        return Err(protocol_error("account_id_required"));
+    }
+    sqlx::query("SELECT * FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?
+        .as_ref()
+        .map(row_to_account)
+        .transpose()
+}
+
+pub async fn get_latest_account_snapshot(
+    pool: &DatabasePool,
+    account_id: &str,
+) -> Result<Option<StoredAccountSnapshot>, sqlx::Error> {
+    if account_id.trim().is_empty() {
+        return Err(protocol_error("account_id_required"));
+    }
+    sqlx::query(
+        r#"
+        SELECT * FROM account_snapshots
+        WHERE account_id = $1
+        ORDER BY observed_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .as_ref()
+    .map(row_to_account_snapshot)
+    .transpose()
+}
+
+pub async fn acquire_live_risk_lock(
+    pool: &DatabasePool,
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    lock_live_risk_transaction(&mut transaction).await?;
+    Ok(transaction)
+}
+
+async fn lock_live_risk_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('ballast-live-risk', 1869376613))")
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
 pub async fn list_task_approvals(
     pool: &DatabasePool,
     task_id: Option<Uuid>,
@@ -425,11 +514,196 @@ pub async fn list_risk_decisions(
     pool: &DatabasePool,
     limit: i64,
 ) -> Result<Vec<StoredRiskDecision>, sqlx::Error> {
+    if limit <= 0 {
+        return Err(protocol_error("risk_decision_query_invalid"));
+    }
     let rows = sqlx::query("SELECT * FROM risk_decisions ORDER BY sequence DESC LIMIT $1")
         .bind(limit)
         .fetch_all(pool)
         .await?;
     rows.iter().map(row_to_risk_decision).collect()
+}
+
+pub async fn list_kill_switches(pool: &DatabasePool) -> Result<Vec<StoredKillSwitch>, sqlx::Error> {
+    let rows = sqlx::query("SELECT * FROM kill_switches ORDER BY scope_type, scope_id")
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(row_to_kill_switch).collect()
+}
+
+pub async fn list_risk_limits(pool: &DatabasePool) -> Result<Vec<StoredRiskLimit>, sqlx::Error> {
+    let rows = sqlx::query("SELECT * FROM risk_limits ORDER BY scope_type, scope_id")
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(row_to_risk_limit).collect()
+}
+
+pub async fn upsert_kill_switch(
+    pool: &DatabasePool,
+    scope_type: &str,
+    scope_id: &str,
+    enabled: bool,
+    reason: &str,
+    changed_by: &str,
+) -> Result<StoredKillSwitch, sqlx::Error> {
+    validate_scope(scope_type, scope_id)?;
+    if reason.trim().is_empty() || changed_by.trim().is_empty() {
+        return Err(protocol_error("kill_switch_metadata_invalid"));
+    }
+    let mut transaction = pool.begin().await?;
+    lock_live_risk_transaction(&mut transaction).await?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO kill_switches (scope_type, scope_id, enabled, reason, changed_by)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (scope_type, scope_id) DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            reason = EXCLUDED.reason,
+            changed_by = EXCLUDED.changed_by,
+            changed_at = now()
+        RETURNING *
+        "#,
+    )
+    .bind(scope_type)
+    .bind(scope_id)
+    .bind(enabled)
+    .bind(reason)
+    .bind(changed_by)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let result = row_to_kill_switch(&row)?;
+    transaction.commit().await?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_risk_limit(
+    pool: &DatabasePool,
+    scope_type: &str,
+    scope_id: &str,
+    allowed_exchanges: Value,
+    allowed_accounts: Value,
+    allowed_instruments: Value,
+    allowed_backends: Value,
+    max_order_notional: rust_decimal::Decimal,
+    max_task_notional: rust_decimal::Decimal,
+    max_daily_notional: rust_decimal::Decimal,
+    max_active_tasks: i32,
+    max_slippage_bps: i32,
+    max_market_age_ms: i64,
+    max_account_age_ms: i64,
+    max_net_exposure: rust_decimal::Decimal,
+    max_native_algo_orders: i32,
+    max_native_duration_seconds: i64,
+    updated_by: &str,
+) -> Result<StoredRiskLimit, sqlx::Error> {
+    validate_scope(scope_type, scope_id)?;
+    if updated_by.trim().is_empty()
+        || !allowed_exchanges.is_array()
+        || !allowed_accounts.is_array()
+        || !allowed_instruments.is_array()
+        || !allowed_backends.is_array()
+        || max_order_notional < rust_decimal::Decimal::ZERO
+        || max_task_notional < rust_decimal::Decimal::ZERO
+        || max_daily_notional < rust_decimal::Decimal::ZERO
+        || max_active_tasks < 0
+        || !(0..=10_000).contains(&max_slippage_bps)
+        || max_market_age_ms < 0
+        || max_account_age_ms < 0
+        || max_net_exposure < rust_decimal::Decimal::ZERO
+        || max_native_algo_orders < 0
+        || max_native_duration_seconds < 0
+    {
+        return Err(protocol_error("risk_limit_invalid"));
+    }
+    reject_binary_floats(&allowed_exchanges)?;
+    reject_binary_floats(&allowed_accounts)?;
+    reject_binary_floats(&allowed_instruments)?;
+    reject_binary_floats(&allowed_backends)?;
+    let mut transaction = pool.begin().await?;
+    lock_live_risk_transaction(&mut transaction).await?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO risk_limits (
+            id, scope_type, scope_id, allowed_exchanges, allowed_accounts,
+            allowed_instruments, allowed_backends, max_order_notional,
+            max_task_notional, max_daily_notional, max_active_tasks,
+            max_slippage_bps, max_market_age_ms, max_account_age_ms, max_net_exposure,
+            max_native_algo_orders, max_native_duration_seconds, updated_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        ON CONFLICT (scope_type, scope_id) DO UPDATE SET
+            allowed_exchanges = EXCLUDED.allowed_exchanges,
+            allowed_accounts = EXCLUDED.allowed_accounts,
+            allowed_instruments = EXCLUDED.allowed_instruments,
+            allowed_backends = EXCLUDED.allowed_backends,
+            max_order_notional = EXCLUDED.max_order_notional,
+            max_task_notional = EXCLUDED.max_task_notional,
+            max_daily_notional = EXCLUDED.max_daily_notional,
+            max_active_tasks = EXCLUDED.max_active_tasks,
+            max_slippage_bps = EXCLUDED.max_slippage_bps,
+            max_market_age_ms = EXCLUDED.max_market_age_ms,
+            max_account_age_ms = EXCLUDED.max_account_age_ms,
+            max_net_exposure = EXCLUDED.max_net_exposure,
+            max_native_algo_orders = EXCLUDED.max_native_algo_orders,
+            max_native_duration_seconds = EXCLUDED.max_native_duration_seconds,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = now()
+        RETURNING *
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(scope_type)
+    .bind(scope_id)
+    .bind(allowed_exchanges)
+    .bind(allowed_accounts)
+    .bind(allowed_instruments)
+    .bind(allowed_backends)
+    .bind(max_order_notional)
+    .bind(max_task_notional)
+    .bind(max_daily_notional)
+    .bind(max_active_tasks)
+    .bind(max_slippage_bps)
+    .bind(max_market_age_ms)
+    .bind(max_account_age_ms)
+    .bind(max_net_exposure)
+    .bind(max_native_algo_orders)
+    .bind(max_native_duration_seconds)
+    .bind(updated_by)
+    .fetch_one(&mut *transaction)
+    .await?;
+    let result = row_to_risk_limit(&row)?;
+    transaction.commit().await?;
+    Ok(result)
+}
+
+pub async fn record_risk_decision(
+    pool: &DatabasePool,
+    task_id: Option<Uuid>,
+    account_id: Option<&str>,
+    stage: &str,
+    decision: &str,
+    code: &str,
+    inputs: Value,
+) -> Result<(), sqlx::Error> {
+    if !matches!(stage, "create" | "approve" | "submit" | "hedge")
+        || !matches!(decision, "allowed" | "denied")
+        || code.trim().is_empty()
+    {
+        return Err(protocol_error("risk_decision_invalid"));
+    }
+    reject_binary_floats(&inputs)?;
+    sqlx::query(
+        "INSERT INTO risk_decisions (task_id, account_id, stage, decision, code, inputs) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(task_id)
+    .bind(account_id)
+    .bind(stage)
+    .bind(decision)
+    .bind(code)
+    .bind(inputs)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 fn row_to_account(row: &sqlx::postgres::PgRow) -> Result<StoredAccount, sqlx::Error> {
@@ -470,6 +744,51 @@ fn row_to_risk_decision(row: &sqlx::postgres::PgRow) -> Result<StoredRiskDecisio
         inputs: row.try_get("inputs")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn row_to_kill_switch(row: &sqlx::postgres::PgRow) -> Result<StoredKillSwitch, sqlx::Error> {
+    Ok(StoredKillSwitch {
+        scope_type: row.try_get("scope_type")?,
+        scope_id: row.try_get("scope_id")?,
+        enabled: row.try_get("enabled")?,
+        reason: row.try_get("reason")?,
+        changed_by: row.try_get("changed_by")?,
+        changed_at: row.try_get("changed_at")?,
+    })
+}
+
+fn row_to_risk_limit(row: &sqlx::postgres::PgRow) -> Result<StoredRiskLimit, sqlx::Error> {
+    Ok(StoredRiskLimit {
+        id: row.try_get("id")?,
+        scope_type: row.try_get("scope_type")?,
+        scope_id: row.try_get("scope_id")?,
+        allowed_exchanges: row.try_get("allowed_exchanges")?,
+        allowed_accounts: row.try_get("allowed_accounts")?,
+        allowed_instruments: row.try_get("allowed_instruments")?,
+        allowed_backends: row.try_get("allowed_backends")?,
+        max_order_notional: row.try_get("max_order_notional")?,
+        max_task_notional: row.try_get("max_task_notional")?,
+        max_daily_notional: row.try_get("max_daily_notional")?,
+        max_active_tasks: row.try_get("max_active_tasks")?,
+        max_slippage_bps: row.try_get("max_slippage_bps")?,
+        max_market_age_ms: row.try_get("max_market_age_ms")?,
+        max_account_age_ms: row.try_get("max_account_age_ms")?,
+        max_net_exposure: row.try_get("max_net_exposure")?,
+        max_native_algo_orders: row.try_get("max_native_algo_orders")?,
+        max_native_duration_seconds: row.try_get("max_native_duration_seconds")?,
+        updated_by: row.try_get("updated_by")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn validate_scope(scope_type: &str, scope_id: &str) -> Result<(), sqlx::Error> {
+    if !matches!(scope_type, "global" | "exchange" | "account") || scope_id.trim().is_empty() {
+        return Err(protocol_error("risk_scope_invalid"));
+    }
+    if scope_type == "global" && scope_id != "global" {
+        return Err(protocol_error("risk_global_scope_invalid"));
+    }
+    Ok(())
 }
 
 fn validate_snapshot(snapshot: &NewAccountSnapshot) -> Result<(), sqlx::Error> {

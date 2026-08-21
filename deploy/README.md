@@ -83,7 +83,7 @@ chmod 600 deploy/secrets/okx-accounts.json
 docker compose -f deploy/compose.yaml -f deploy/compose.private.yaml up -d
 ```
 
-当前仅 `AccountService.GetAccountSnapshot` 支持 OKX 余额、线性永续仓位和普通未结订单快照。反向永续因数量单位尚未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败关闭；账户存在条件单或算法订单时，快照也会显式失败，避免静默遗漏风险敞口。`TradingService`、私有流和原生算法提交继续显式禁用；不得给该阶段的 Key 授予交易或提现权限。
+当前 OKX 支持余额、线性永续仓位和普通未结订单快照、按 `client_order_id` 查询、价格保护 IOC、撤单及私有订单/成交流。反向永续因数量单位尚未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败关闭；账户存在条件单或算法订单时，快照也会显式失败，避免静默遗漏风险敞口。其他交易所私有能力和原生算法提交继续显式禁用；不得给未完成 P0 验收的账户授予生产交易或提现权限。
 
 private overlay 会将 `BALLAST_PRIVATE_RECONCILIATION_ENABLED=true`，用于读取账户快照并查询本地已知非终态订单。默认 paper Compose 固定为 `false`，不触发私有账户请求。
 

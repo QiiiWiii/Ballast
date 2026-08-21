@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Balances, Exchange as CcxtExchange, Order as CcxtOrder, Position as CcxtPosition } from "ccxt";
 
+import { MarketKind } from "../generated/ballast/gateway/v1/MarketKind.js";
 import {
   OkxAccountAdapter,
   fetchOrdinaryOpenOrders,
@@ -210,6 +211,50 @@ test("order lookup uses the OKX client-order-id parameter and validates the inst
     { market: "BTC/USDT" },
     { fetchOrder: ["clientOrder1", "BTC/USDT", { clientOrderId: "clientOrder1" }] },
   ]);
+});
+
+test("IOC submission sends one protected limit order with the stable client id", async () => {
+  const calls: unknown[] = [];
+  const client = {
+    loadMarkets: async () => undefined,
+    market: () => ({ spot: true }),
+    setSandboxMode: () => undefined,
+    createOrder: async (...args: unknown[]) => {
+      calls.push(args);
+      return {
+        id: "exchange-order-1",
+        clientOrderId: "clientOrder1",
+        symbol: "BTC/USDT",
+        side: "buy",
+        amount: "1.000000000000000001",
+        filled: "1.000000000000000001",
+        average: "60000.123456789123456789",
+        status: "closed",
+        info: { state: "filled" },
+        timestamp: 1_700_000_000_000,
+      } as unknown as CcxtOrder;
+    },
+  } as unknown as CcxtExchange;
+  const adapter = new OkxAccountAdapter(account, 1_000, client);
+
+  const order = await adapter.placeIocOrder(
+    "BTC/USDT",
+    MarketKind.MARKET_KIND_SPOT,
+    "buy",
+    "1.000000000000000001",
+    "60000.123456789123456789",
+    "clientOrder1",
+  );
+
+  assert.equal(order.clientOrderId, "clientOrder1");
+  assert.deepEqual(calls, [[
+    "BTC/USDT",
+    "limit",
+    "buy",
+    "1.000000000000000001",
+    "60000.123456789123456789",
+    { ordType: "ioc", clOrdId: "clientOrder1", tdMode: "cash" },
+  ]]);
 });
 
 test("queried order states normalize without treating rejected orders as cancelled", () => {

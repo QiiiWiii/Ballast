@@ -19,6 +19,18 @@ pub(super) fn positive_decimal(value: &str, field: &'static str) -> ApiResult<De
     Ok(parsed)
 }
 
+pub(super) fn non_negative_decimal(value: &str, field: &'static str) -> ApiResult<Decimal> {
+    let parsed = Decimal::from_str(value)
+        .map_err(|_| ApiError::validation("invalid_decimal", json!({ "field": field })))?;
+    if parsed < Decimal::ZERO {
+        return Err(ApiError::validation(
+            "decimal_must_be_non_negative",
+            json!({ "field": field }),
+        ));
+    }
+    Ok(parsed)
+}
+
 pub(super) fn decimal_option(value: Option<Decimal>) -> Option<String> {
     value.map(|value| value.to_string())
 }

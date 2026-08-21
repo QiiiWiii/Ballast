@@ -27,7 +27,11 @@ pub fn spawn_worker(
             interval.tick().await;
             match list_accounts(&database).await {
                 Ok(accounts) => {
-                    stream::iter(accounts.into_iter().filter(|account| account.enabled))
+                    stream::iter(
+                        accounts
+                            .into_iter()
+                            .filter(|account| account.enabled && account.exchange == "okx"),
+                    )
                         .for_each_concurrent(MAX_CONCURRENT_ACCOUNTS, |account| {
                             let database = database.clone();
                             let gateway = gateway.clone();

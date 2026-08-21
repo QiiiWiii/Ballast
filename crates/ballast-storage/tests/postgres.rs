@@ -7,6 +7,7 @@ use ballast_storage::{
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn task_persistence_is_idempotent_and_event_ordered() {
@@ -122,6 +123,9 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
         2
     );
     let new_task = NewExecutionTask {
+        id: Uuid::now_v7(),
+        account_id: "paper".to_owned(),
+        execution_mode: "paper".to_owned(),
         instrument_id: stored[0].id,
         template_version_id: template_version.id,
         idempotency_key: format!(
@@ -137,6 +141,7 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
         slice_interval_ms: 1_000,
         start_at,
         deadline_at: start_at + Duration::minutes(1),
+        requested_by: None,
     };
     let first = ballast_storage::create_task(&pool, new_task.clone())
         .await
@@ -151,6 +156,7 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
         &pool,
         SliceRecord {
             task_id: first.id,
+            child_order_id: None,
             sequence: 1,
             requested_amount: Decimal::new(5, 1),
             native_quantity: Decimal::new(5, 1),

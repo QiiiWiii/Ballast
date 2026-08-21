@@ -96,6 +96,67 @@ export class OkxAccountAdapter {
     return normalizeOrder(this.#account, this.#client, order, Date.now());
   }
 
+  async placeIocOrder(
+    symbol: string,
+    marketKind: MarketKind,
+    side: "buy" | "sell",
+    quantity: string,
+    limitPrice: string,
+    clientOrderId: string,
+  ): Promise<OrderSnapshot> {
+    await this.#client.loadMarkets();
+    const market = requiredMarket(this.#client, symbol);
+    if (orderMarketKind(market) !== marketKind) throw new Error("private_order_instrument_mismatch");
+    const createOrder = this.#client.createOrder as unknown as (
+      symbol: string,
+      type: string,
+      side: string,
+      amount: string,
+      price: string,
+      params: Record<string, unknown>,
+    ) => Promise<CcxtOrder>;
+    const order = await createOrder(
+      symbol,
+      "limit",
+      side,
+      quantity,
+      limitPrice,
+      {
+        ordType: "ioc",
+        clOrdId: clientOrderId,
+        tdMode: marketKind === MarketKind.MARKET_KIND_PERPETUAL ? "cross" : "cash",
+      },
+    );
+    return normalizeOrder(
+      this.#account,
+      this.#client,
+      responseWithClientOrderId(order, clientOrderId),
+      Date.now(),
+    );
+  }
+
+  async cancelOrderByClientId(
+    symbol: string,
+    marketKind: MarketKind,
+    clientOrderId: string,
+  ): Promise<OrderSnapshot> {
+    await this.#client.loadMarkets();
+    const market = requiredMarket(this.#client, symbol);
+    if (orderMarketKind(market) !== marketKind) throw new Error("private_order_instrument_mismatch");
+    if (this.#client.has.fetchOrder !== true || this.#client.has.cancelOrder !== true) {
+      throw new Error("cancel_order_not_supported");
+    }
+    const existing = await this.#client.fetchOrder(clientOrderId, symbol, { clientOrderId });
+    const existingWithClientOrderId = responseWithClientOrderId(existing, clientOrderId);
+    const cancelled = await this.#client.cancelOrder(existingWithClientOrderId.id, symbol, { clOrdId: clientOrderId });
+    return normalizeOrder(
+      this.#account,
+      this.#client,
+      responseWithClientOrderId(cancelled, clientOrderId),
+      Date.now(),
+    );
+  }
+
   async close(): Promise<void> {
     await this.#client.close();
   }
@@ -253,6 +314,13 @@ function requiredMarket(client: CcxtExchange, symbol: string): CcxtMarket {
   const market = client.market(symbol);
   if (!market) throw new Error("private_market_not_loaded");
   return market;
+}
+
+function responseWithClientOrderId(order: CcxtOrder, expected: string): CcxtOrder {
+  const info = isRecord(order.info) ? order.info : {};
+  const observed = order.clientOrderId ?? (typeof info.clOrdId === "string" ? info.clOrdId : undefined);
+  if (observed !== expected) throw new Error("private_order_response_mismatch");
+  return order.clientOrderId === expected ? order : { ...order, clientOrderId: observed };
 }
 
 function decimalText(value: unknown, field: string): string {

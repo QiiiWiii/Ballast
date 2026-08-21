@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
-use ballast_core::{MarketKind, QuantityUnit, Side};
+use ballast_core::{Instrument, MarketKind, QuantityUnit, Side};
 use ballast_storage::{NewExecutionTask, StoredExecutionSlice, StoredExecutionTask};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::auth::{RequestAuth, Role};
+use crate::risk::{self, RiskContext, RiskError, RiskStage};
+use ballast_gateway_client::execution_order_snapshot_from_proto;
 
 use super::{ApiError, ApiResult, util};
 
@@ -20,10 +23,13 @@ pub(super) struct CreateTaskRequest {
     side: Side,
     target_amount: String,
     template_version_id: Uuid,
+    execution_mode: Option<String>,
+    account_id: Option<String>,
 }
 
 pub(super) async fn create_task(
     State(state): State<AppState>,
+    auth: RequestAuth,
     headers: HeaderMap,
     Json(request): Json<CreateTaskRequest>,
 ) -> ApiResult<(StatusCode, Json<TaskView>)> {
@@ -33,6 +39,24 @@ pub(super) async fn create_task(
         .filter(|value| !value.trim().is_empty() && value.len() <= 200)
         .ok_or_else(|| ApiError::validation("idempotency_key_required", json!({})))?;
     let target_amount = util::positive_decimal(&request.target_amount, "target_amount")?;
+    let execution_mode = request.execution_mode.as_deref().unwrap_or("paper");
+    if !matches!(execution_mode, "paper" | "live") {
+        return Err(ApiError::validation(
+            "execution_mode_invalid",
+            json!({ "execution_mode": execution_mode }),
+        ));
+    }
+    let requested_by = if execution_mode == "live" {
+        if !state.live_enabled {
+            return Err(ApiError::locked("live_execution_disabled"));
+        }
+        let principal = auth
+            .require_role(Role::Operator)?
+            .ok_or_else(|| ApiError::unauthorized("live_requires_oidc"))?;
+        Some(principal.subject.clone())
+    } else {
+        None
+    };
     let template_version = ballast_storage::get_strategy_template_version(
         &state.database,
         request.template_version_id,
@@ -65,6 +89,35 @@ pub(super) async fn create_task(
             json!({ "quantity_unit": "contracts" }),
         ));
     }
+    let account = if execution_mode == "live" {
+        let account_id = request
+            .account_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| ApiError::validation("account_id_required", json!({})))?;
+        let account = ballast_storage::get_account(&state.database, account_id)
+            .await
+            .map_err(ApiError::database)?
+            .ok_or_else(|| ApiError::not_found("account_not_found"))?;
+        if !account.enabled {
+            return Err(ApiError::conflict("account_disabled"));
+        }
+        if !account.withdrawals_disabled || !account.ip_restricted {
+            return Err(ApiError::conflict("account_safety_metadata_invalid"));
+        }
+        if account.exchange != util::exchange_text(instrument.instrument.id.exchange) {
+            return Err(ApiError::validation(
+                "account_exchange_mismatch",
+                json!({ "account_id": account.id }),
+            ));
+        }
+        if account.exchange != "okx" {
+            return Err(ApiError::conflict("live_order_exchange_unsupported"));
+        }
+        Some((account.id, account.exchange))
+    } else {
+        None
+    };
     let start_at = Utc::now();
     let duration = chrono::Duration::seconds(template_version.duration_seconds);
     let deadline_at = start_at + duration;
@@ -73,9 +126,33 @@ pub(super) async fn create_task(
         "max_slice_amount": template_version.max_slice_amount.map(|value| value.to_string()),
     });
     let expected_strategy_params = strategy_params.clone();
+    let task_id = Uuid::now_v7();
+    if execution_mode == "live" {
+        let (account_id, exchange) = account.as_ref().expect("live account is validated");
+        check_live_risk(
+            &state,
+            RiskStage::Create,
+            task_id,
+            account_id,
+            exchange,
+            request.instrument_id,
+            &instrument.instrument,
+            request.side,
+            target_amount,
+            quantity_unit,
+            template_version.max_slippage_bps,
+            template_version.duration_seconds,
+        )
+        .await?;
+    }
     let task = ballast_storage::create_task(
         &state.database,
         NewExecutionTask {
+            id: task_id,
+            account_id: account
+                .as_ref()
+                .map_or_else(|| "paper".to_owned(), |value| value.0.clone()),
+            execution_mode: execution_mode.to_owned(),
             instrument_id: request.instrument_id,
             template_version_id: request.template_version_id,
             idempotency_key: idempotency_key.to_owned(),
@@ -88,6 +165,7 @@ pub(super) async fn create_task(
             slice_interval_ms: template_version.slice_interval_ms,
             start_at,
             deadline_at,
+            requested_by: requested_by.clone(),
         },
     )
     .await
@@ -101,6 +179,9 @@ pub(super) async fn create_task(
         || task.strategy_params != expected_strategy_params
         || task.max_slippage_bps != template_version.max_slippage_bps
         || task.slice_interval_ms != template_version.slice_interval_ms
+        || task.account_id != account.as_ref().map_or("paper", |value| value.0.as_str())
+        || task.execution_mode != execution_mode
+        || task.requested_by != requested_by
     {
         return Err(ApiError::conflict("idempotency_key_conflict"));
     }
@@ -140,6 +221,7 @@ pub(super) async fn get_task(
 
 pub(super) async fn cancel_task(
     State(state): State<AppState>,
+    auth: RequestAuth,
     Path(task_id): Path<Uuid>,
 ) -> ApiResult<Json<TaskView>> {
     let existing = ballast_storage::get_task(&state.database, task_id)
@@ -150,6 +232,11 @@ pub(super) async fn cancel_task(
         existing.status.as_str(),
         "completed" | "cancelled" | "expired" | "failed"
     ) {
+        if existing.execution_mode == "live" {
+            auth.require_role(Role::Operator)?
+                .ok_or_else(|| ApiError::unauthorized("live_requires_oidc"))?;
+            cancel_live_children(&state, &existing).await?;
+        }
         ballast_storage::cancel_task(&state.database, task_id)
             .await
             .map_err(ApiError::database)?;
@@ -159,6 +246,114 @@ pub(super) async fn cancel_task(
         .map_err(ApiError::database)?
         .ok_or_else(|| ApiError::not_found("task_not_found"))?;
     Ok(Json(TaskView::from(task)))
+}
+
+async fn cancel_live_children(state: &AppState, task: &StoredExecutionTask) -> ApiResult<()> {
+    let children = ballast_storage::list_task_open_orders(&state.database, task.id)
+        .await
+        .map_err(ApiError::database)?;
+    if children.is_empty() {
+        return Ok(());
+    }
+    let account = ballast_storage::get_account(&state.database, &task.account_id)
+        .await
+        .map_err(ApiError::database)?
+        .ok_or_else(|| ApiError::not_found("account_not_found"))?;
+    let instrument = ballast_storage::get_instrument(&state.database, task.instrument_id)
+        .await
+        .map_err(ApiError::database)?
+        .ok_or_else(|| ApiError::not_found("instrument_not_found"))?;
+    let exchange = match instrument.instrument.id.exchange {
+        ballast_core::Exchange::Okx => ballast_gateway_client::proto::Exchange::Okx as i32,
+        _ => return Err(ApiError::conflict("live_order_exchange_unsupported")),
+    };
+    let market_kind = match instrument.instrument.id.market_kind {
+        MarketKind::Spot => ballast_gateway_client::proto::MarketKind::Spot as i32,
+        MarketKind::Perpetual => ballast_gateway_client::proto::MarketKind::Perpetual as i32,
+    };
+    let environment = match account.environment.as_str() {
+        "demo" => ballast_gateway_client::proto::AccountEnvironment::Demo as i32,
+        "production" => ballast_gateway_client::proto::AccountEnvironment::Production as i32,
+        _ => return Err(ApiError::conflict("account_environment_invalid")),
+    };
+    for child in children {
+        if matches!(
+            child.status,
+            ballast_execution::OrderState::SubmissionPending
+                | ballast_execution::OrderState::SubmissionUnknown
+        ) {
+            return Err(ApiError::conflict("live_order_reconciliation_required"));
+        }
+        ballast_storage::compare_and_set_child_order_state(
+            &state.database,
+            &child.exchange,
+            &child.account_id,
+            &child.client_order_id,
+            &[child.status],
+            &ballast_storage::ChildOrderStateUpdate {
+                status: ballast_execution::OrderState::CancelPending,
+                exchange_order_id: child.exchange_order_id.clone(),
+                filled_quantity: child.filled_quantity,
+                average_price: child.average_price,
+                limit_price: child.limit_price,
+                raw_status: None,
+                state_reason: Some("cancel_requested".to_owned()),
+                submitted_at: child.submitted_at,
+                last_reconciled_at: Some(Utc::now()),
+            },
+        )
+        .await
+        .map_err(ApiError::database)?;
+        let response = state
+            .gateway
+            .cancel_order(ballast_gateway_client::proto::CancelOrderRequest {
+                account: Some(ballast_gateway_client::proto::AccountRef {
+                    account_id: account.id.clone(),
+                    exchange,
+                    environment,
+                }),
+                instrument: Some(ballast_gateway_client::proto::InstrumentKey {
+                    exchange,
+                    market_kind,
+                    symbol: instrument.instrument.id.symbol.clone(),
+                }),
+                request_id: Uuid::now_v7().to_string(),
+                client_order_id: child.client_order_id.clone(),
+            })
+            .await
+            .map_err(ApiError::gateway)?;
+        if response.client_order_id != child.client_order_id {
+            return Err(ApiError::conflict("live_cancel_response_mismatch"));
+        }
+        let snapshot = execution_order_snapshot_from_proto(response.clone())
+            .map_err(|_| ApiError::conflict("live_cancel_response_invalid"))?;
+        let snapshot_state = snapshot.state;
+        let snapshot_observed_at = snapshot.observed_at;
+        ballast_storage::compare_and_set_child_order_state(
+            &state.database,
+            &child.exchange,
+            &child.account_id,
+            &child.client_order_id,
+            &[ballast_execution::OrderState::CancelPending],
+            &ballast_storage::ChildOrderStateUpdate {
+                status: snapshot_state,
+                exchange_order_id: snapshot.exchange_order_id.clone(),
+                filled_quantity: snapshot.filled_quantity,
+                average_price: snapshot.average_price,
+                limit_price: child.limit_price,
+                raw_status: None,
+                state_reason: response.reason_code,
+                submitted_at: child.submitted_at,
+                last_reconciled_at: Some(snapshot_observed_at),
+            },
+        )
+        .await
+        .map_err(ApiError::database)?;
+        if !snapshot_state.is_terminal() {
+            return Err(ApiError::conflict("live_order_cancel_pending"));
+        }
+    }
+    Ok(())
 }
 
 pub(super) async fn list_slices(
@@ -180,6 +375,80 @@ pub(super) async fn list_slices(
             .map(SliceView::from)
             .collect(),
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn check_live_risk(
+    state: &AppState,
+    stage: RiskStage,
+    task_id: Uuid,
+    account_id: &str,
+    exchange: &str,
+    instrument_id: Uuid,
+    instrument: &Instrument,
+    side: Side,
+    target_amount: rust_decimal::Decimal,
+    quantity_unit: QuantityUnit,
+    max_slippage_bps: i32,
+    duration_seconds: i64,
+) -> ApiResult<()> {
+    let order_book = state
+        .gateway
+        .get_order_book(&instrument.id, 5)
+        .await
+        .map_err(ApiError::gateway)?;
+    let reference_price = match side {
+        Side::Buy => order_book.asks.first().map(|level| level.price),
+        Side::Sell => order_book.bids.first().map(|level| level.price),
+    }
+    .ok_or_else(|| ApiError::conflict("live_market_side_unavailable"))?;
+    let market_age_ms = (Utc::now().timestamp_millis() - order_book.gateway_received_at_ms).max(0);
+    let native_quantity = instrument
+        .target_to_native_quantity(target_amount, quantity_unit, reference_price)
+        .map_err(|_| ApiError::conflict("live_quantity_conversion_failed"))?;
+    let task_notional = instrument
+        .native_to_quote_quantity(native_quantity, reference_price)
+        .map_err(|_| ApiError::conflict("live_notional_conversion_failed"))?;
+    let snapshot = risk::latest_snapshot(&state.database, account_id)
+        .await
+        .map_err(ApiError::database)?;
+    let current_exposure = risk::snapshot_exposure(snapshot.as_ref(), &instrument.id.symbol)
+        .map_err(|code| ApiError::conflict(code))?;
+    let account_age_ms =
+        risk::snapshot_age_ms(snapshot.as_ref()).map_err(|code| ApiError::conflict(code))?;
+    let projected_exposure = instrument
+        .native_to_base_quantity(native_quantity, reference_price)
+        .map_err(|_| ApiError::conflict("live_exposure_conversion_failed"))?
+        .abs();
+    risk::check(
+        &state.database,
+        stage,
+        &RiskContext {
+            task_id: Some(task_id),
+            account_id: account_id.to_owned(),
+            exchange: exchange.to_owned(),
+            instrument_id,
+            backend: "managed_ioc".to_owned(),
+            order_notional: task_notional,
+            task_notional,
+            market_age_ms,
+            account_age_ms,
+            max_slippage_bps,
+            daily_notional: task_notional,
+            net_exposure: current_exposure + projected_exposure,
+            native_algo_orders: 0,
+            native_duration_seconds: duration_seconds,
+        },
+    )
+    .await
+    .map_err(map_risk_error)
+}
+
+fn map_risk_error(error: RiskError) -> ApiError {
+    match error {
+        RiskError::Denied(code) => ApiError::conflict(code),
+        RiskError::Database(error) => ApiError::database(error),
+    }
 }
 
 #[derive(Debug, Serialize)]

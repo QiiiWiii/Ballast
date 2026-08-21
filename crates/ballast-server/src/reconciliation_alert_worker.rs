@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use ballast_storage::{
-    ClaimedReconciliationWebhook, DatabasePool, ReconciliationWebhookPayload,
+    ClaimedReconciliationWebhook, DatabasePool, claim_execution_alerts,
     claim_reconciliation_webhooks, complete_reconciliation_webhook, fail_reconciliation_webhook,
     retry_reconciliation_webhook,
 };
@@ -38,7 +38,7 @@ pub fn spawn_worker(database: DatabasePool, config: ReconciliationAlertConfig) {
         loop {
             interval.tick().await;
             let claimed_until = Utc::now() + chrono::Duration::seconds(CLAIM_DURATION_SECONDS);
-            match claim_reconciliation_webhooks(&database, CLAIM_BATCH_SIZE, claimed_until).await {
+            match claim_alerts(&database, claimed_until).await {
                 Ok(commands) => {
                     futures_util::stream::iter(commands)
                         .for_each_concurrent(CLAIM_BATCH_SIZE as usize, |command| {
@@ -55,6 +55,16 @@ pub fn spawn_worker(database: DatabasePool, config: ReconciliationAlertConfig) {
             }
         }
     });
+}
+
+async fn claim_alerts(
+    database: &DatabasePool,
+    claimed_until: chrono::DateTime<Utc>,
+) -> Result<Vec<ClaimedReconciliationWebhook>, sqlx::Error> {
+    let mut commands =
+        claim_reconciliation_webhooks(database, CLAIM_BATCH_SIZE, claimed_until).await?;
+    commands.extend(claim_execution_alerts(database, CLAIM_BATCH_SIZE, claimed_until).await?);
+    Ok(commands)
 }
 
 async fn deliver_one(
@@ -127,11 +137,10 @@ async fn send_webhook(
     webhook_url: &Url,
     payload: &Value,
 ) -> Result<(), DeliveryError> {
-    let payload: ReconciliationWebhookPayload = serde_json::from_value(payload.clone())
-        .map_err(|_| DeliveryError::Permanent("webhook_payload_invalid"))?;
+    validate_payload(payload)?;
     let response = client
         .post(webhook_url.clone())
-        .json(&payload)
+        .json(payload)
         .send()
         .await
         .map_err(|_| DeliveryError::Retry("webhook_transport_failed"))?;
@@ -143,6 +152,21 @@ async fn send_webhook(
         return Err(DeliveryError::Retry(status_error_code(status)));
     }
     Err(DeliveryError::Permanent(status_error_code(status)))
+}
+
+fn validate_payload(payload: &Value) -> Result<(), DeliveryError> {
+    let object = payload
+        .as_object()
+        .ok_or(DeliveryError::Permanent("webhook_payload_invalid"))?;
+    if object.get("version").and_then(Value::as_u64) != Some(1)
+        || object
+            .get("event")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.is_empty())
+    {
+        return Err(DeliveryError::Permanent("webhook_payload_invalid"));
+    }
+    Ok(())
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {

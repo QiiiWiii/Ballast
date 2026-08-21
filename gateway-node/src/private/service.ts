@@ -19,11 +19,20 @@ import type { GetAccountSnapshotRequest__Output } from "../generated/ballast/gat
 import type { AccountSnapshot } from "../generated/ballast/gateway/v1/AccountSnapshot.js";
 import type { GetOrderByClientIdRequest__Output } from "../generated/ballast/gateway/v1/GetOrderByClientIdRequest.js";
 import type { OrderSnapshot } from "../generated/ballast/gateway/v1/OrderSnapshot.js";
+import type { PlaceIocOrderRequest__Output } from "../generated/ballast/gateway/v1/PlaceIocOrderRequest.js";
+import type { CancelOrderRequest__Output } from "../generated/ballast/gateway/v1/CancelOrderRequest.js";
+import type { WatchAccountEventsRequest__Output } from "../generated/ballast/gateway/v1/WatchAccountEventsRequest.js";
+import type { WatchOrderEventsRequest__Output } from "../generated/ballast/gateway/v1/WatchOrderEventsRequest.js";
+import type { AccountEvent } from "../generated/ballast/gateway/v1/AccountEvent.js";
+import type { OrderEvent } from "../generated/ballast/gateway/v1/OrderEvent.js";
 import { AccountEnvironment } from "../generated/ballast/gateway/v1/AccountEnvironment.js";
 import { Exchange } from "../generated/ballast/gateway/v1/Exchange.js";
 import { MarketKind } from "../generated/ballast/gateway/v1/MarketKind.js";
+import { Side } from "../generated/ballast/gateway/v1/Side.js";
+import { Decimal } from "decimal.js";
 import { PrivateAccountRegistry } from "./accounts.js";
 import { OkxAccountAdapter } from "./okx-account.js";
+import { OkxPrivateStream } from "./okx-private-stream.js";
 
 export class PrivateAccountService {
   readonly #registry: PrivateAccountRegistry;
@@ -51,26 +60,67 @@ export class PrivateAccountService {
   async getOrderByClientId(request: GetOrderByClientIdRequest__Output): Promise<OrderSnapshot> {
     requireRequestId(request.requestId);
     const clientOrderId = requireClientOrderId(request.clientOrderId);
-    const instrument = request.instrument;
-    if (!instrument) throw serviceError(grpc.status.INVALID_ARGUMENT, "instrument_required");
-    if (instrument.exchange !== Exchange.EXCHANGE_OKX) {
-      throw serviceError(grpc.status.INVALID_ARGUMENT, "private_order_exchange_invalid");
-    }
-    if (instrument.marketKind !== MarketKind.MARKET_KIND_SPOT
-      && instrument.marketKind !== MarketKind.MARKET_KIND_PERPETUAL) {
-      throw serviceError(grpc.status.INVALID_ARGUMENT, "private_order_market_kind_invalid");
-    }
-    const symbol = instrument.symbol?.trim();
-    if (!symbol || symbol !== instrument.symbol) {
-      throw serviceError(grpc.status.INVALID_ARGUMENT, "private_order_symbol_invalid");
-    }
+    const { symbol, marketKind } = validatedInstrument(request.instrument);
     const { account, adapter } = this.#validatedAccount(request.account);
     try {
-      return await adapter.getOrderByClientId(symbol, instrument.marketKind, clientOrderId);
+      return await adapter.getOrderByClientId(symbol, marketKind, clientOrderId);
     } catch (error) {
       this.#logger.warn({ accountId: account.accountId, code: errorCode(error) }, "private order query failed");
       throw snapshotServiceError(error);
     }
+  }
+
+  async placeIocOrder(request: PlaceIocOrderRequest__Output): Promise<OrderSnapshot> {
+    requireRequestId(request.requestId);
+    const clientOrderId = requireClientOrderId(request.clientOrderId);
+    const { symbol, marketKind } = validatedInstrument(request.instrument);
+    const side = request.side === Side.SIDE_BUY
+      ? "buy"
+      : request.side === Side.SIDE_SELL
+        ? "sell"
+        : invalid("private_order_side_invalid");
+    const quantity = positiveDecimal(request.quantity, "private_order_quantity_invalid");
+    const limitPrice = positiveDecimal(request.limitPrice, "private_order_limit_price_invalid");
+    const { account, adapter } = this.#validatedAccount(request.account);
+    try {
+      return await adapter.placeIocOrder(symbol, marketKind, side, quantity, limitPrice, clientOrderId);
+    } catch (error) {
+      this.#logger.warn({ accountId: account.accountId, code: errorCode(error) }, "private IOC order failed");
+      throw snapshotServiceError(error);
+    }
+  }
+
+  async cancelOrder(request: CancelOrderRequest__Output): Promise<OrderSnapshot> {
+    requireRequestId(request.requestId);
+    const clientOrderId = requireClientOrderId(request.clientOrderId);
+    const { symbol, marketKind } = validatedInstrument(request.instrument);
+    const { account, adapter } = this.#validatedAccount(request.account);
+    try {
+      return await adapter.cancelOrderByClientId(symbol, marketKind, clientOrderId);
+    } catch (error) {
+      this.#logger.warn({ accountId: account.accountId, code: errorCode(error) }, "private order cancellation failed");
+      throw snapshotServiceError(error);
+    }
+  }
+
+  async watchAccountEvents(
+    request: WatchAccountEventsRequest__Output,
+    emit: (event: AccountEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    requireRequestId(request.requestId);
+    const { account } = this.#validatedAccount(request.account);
+    await new OkxPrivateStream(account, this.#timeoutMs).run("account", (event) => emit(event as AccountEvent), signal);
+  }
+
+  async watchOrderEvents(
+    request: WatchOrderEventsRequest__Output,
+    emit: (event: OrderEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    requireRequestId(request.requestId);
+    const { account } = this.#validatedAccount(request.account);
+    await new OkxPrivateStream(account, this.#timeoutMs).run("orders", (event) => emit(event as OrderEvent), signal);
   }
 
   #validatedAccount(ref: GetAccountSnapshotRequest__Output["account"]): {
@@ -150,6 +200,7 @@ function isCapabilityError(error: unknown): boolean {
     "fetch_positions_not_supported",
     "fetch_open_orders_not_supported",
     "fetch_order_not_supported",
+    "cancel_order_not_supported",
     "private_position_market_kind_invalid",
     "private_order_market_kind_invalid",
     "private_algo_open_orders_unsupported",
@@ -167,4 +218,33 @@ function requireClientOrderId(value: string | undefined): string {
     throw serviceError(grpc.status.INVALID_ARGUMENT, "client_order_id_invalid");
   }
   return value;
+}
+
+function validatedInstrument(value: GetOrderByClientIdRequest__Output["instrument"]): {
+  symbol: string;
+  marketKind: MarketKind;
+} {
+  if (!value) throw invalid("instrument_required");
+  if (value.exchange !== Exchange.EXCHANGE_OKX) throw invalid("private_order_exchange_invalid");
+  if (value.marketKind !== MarketKind.MARKET_KIND_SPOT
+    && value.marketKind !== MarketKind.MARKET_KIND_PERPETUAL) {
+    throw invalid("private_order_market_kind_invalid");
+  }
+  const symbol = value.symbol?.trim();
+  if (!symbol || symbol !== value.symbol) throw invalid("private_order_symbol_invalid");
+  return { symbol, marketKind: value.marketKind };
+}
+
+function positiveDecimal(value: string | undefined, code: string): string {
+  if (!value || value.trim() !== value) throw invalid(code);
+  try {
+    if (!new Decimal(value).isFinite() || new Decimal(value).lte(0)) throw new Error(code);
+  } catch {
+    throw invalid(code);
+  }
+  return value;
+}
+
+function invalid(details: string): never {
+  throw serviceError(grpc.status.INVALID_ARGUMENT, details);
 }

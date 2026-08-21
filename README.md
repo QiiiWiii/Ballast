@@ -79,7 +79,7 @@ docker compose -f deploy/compose.yaml up -d
 - API Key 不得写入仓库、数据库、日志或错误信息。
 - Node 网关不拥有策略、任务状态和风险决策。
 - 任何状态不确定的下单请求都必须先对账，不得盲目重试。
-- `BALLAST_LIVE_ENABLED` 默认 `false`；当前实现检测到 `true` 会拒绝启动。
+- `BALLAST_LIVE_ENABLED` 默认 `false`；只有 OIDC、私有对账、风险限额、kill switch、审批和告警前置条件全部满足时才允许设为 `true`，否则服务拒绝启动。
 
 ## 文档与社区
 

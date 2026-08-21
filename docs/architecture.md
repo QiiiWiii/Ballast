@@ -22,7 +22,7 @@ Caddy（公网部署，可选）──► web/nginx ──► ballast-server (Ru
 
 Rust 是任务、策略、精度转换、模拟成交、持久化和事件的事实源。Node 网关只负责交易所通信、限频、字段标准化、连接状态和有边界的传输恢复。私有服务协议已经定义，但运行时默认关闭。对账差异告警复用 PostgreSQL outbox：对账成功事务写入脱敏摘要，独立 worker 负责 HTTPS 投递、租约、退避重试和最终失败记录。
 
-`ballast-execution` 承载执行状态机、`Clock`、市场/账户/执行端口和 managed 切片决策。`ballast-server` 只负责领取任务、装配网关/数据库端口并持久化领域结果。事件与 outbox 继续使用 PostgreSQL 事务，不引入额外消息中间件。
+`ballast-execution` 承载执行状态机、`Clock`、市场/账户/执行端口和 managed 切片决策。`ballast-server` 只负责领取任务、装配网关/数据库端口并持久化领域结果；私有订单/成交流由独立 worker 消费，成交按交易所成交 ID 幂等写入 `fills`。事件与 outbox 继续使用 PostgreSQL 事务，不引入额外消息中间件。
 
 ## 公共行情契约
 
@@ -58,12 +58,12 @@ Compose 只向宿主机暴露 web/nginx 的 Web/API 入口。公网部署将该�
 
 `private_gateway.proto` 定义独立的 `AccountService`、`TradingService` 和 `AlgorithmicTradingService`。普通订单包含 `submission_unknown`；原生算法使用 Binance/OKX 强类型 `oneof`，不允许透传 ccxt 对象或任意方法名。
 
-默认网关不会读取交易所 API Key。启用 `deploy/compose.private.yaml` 后，网关仅从挂载 secret 文件装配 OKX 只读账户，并开放余额、线性永续仓位和普通未结订单的 `AccountService.GetAccountSnapshot`，以及 `TradingService.GetOrderByClientId` 只读查询；提交、取消、私有流和原生算法 RPC 继续失败关闭。所有金融数值都保持为十进制字符串，线性永续仓位按 `contracts × contractSize` 归一为有符号基础资产数量，反向永续因数量单位未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败。条件单或算法订单无法由普通订单契约准确表达，只要账户中存在此类未结订单，整个快照就显式失败。Rust 周期 worker 只查询本地非终态订单，并用持久化状态机原子收敛，不重发订单。`BALLAST_LIVE_ENABLED=true` 仍拒绝启动，直到账户级差异、零默认风控和审批链真正完成。
+默认网关不会读取交易所 API Key。启用 `deploy/compose.private.yaml` 后，网关仅从挂载 secret 文件装配 OKX 账户，并开放余额、线性永续仓位、普通未结订单快照、按 `client_order_id` 查询、价格保护 IOC、撤单和私有订单/成交流；其他交易所能力继续显式失败。所有金融数值都保持为十进制字符串，线性永续仓位按 `contracts × contractSize` 归一为有符号基础资产数量，反向永续因数量单位未进入协议而显式失败，缺失稳定 `client_order_id` 的订单同样失败。条件单或算法订单无法由普通订单契约准确表达，只要账户中存在此类未结订单，整个快照就显式失败。Rust 周期 worker 只查询本地非终态订单，并用持久化状态机原子收敛；提交前先按 client id 查询，不会盲目重发。只有 OIDC、私有对账、三层风险、kill switch、审批和告警前置条件全部满足时，`BALLAST_LIVE_ENABLED=true` 才允许启动。
 
 以下能力仍需后续安全实现：
 
 - OKX 之外的只读账户快照与私有流适配器
-- 价格保护 IOC 提交和 unknown 订单告警
+- 其他交易所的私有账户与交易适配器
 - 限额默认零的风控层
 - 成交驱动双腿对冲和裸露时间熔断
 

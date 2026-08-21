@@ -10,6 +10,9 @@ use crate::DatabasePool;
 
 #[derive(Debug, Clone)]
 pub struct NewExecutionTask {
+    pub id: Uuid,
+    pub account_id: String,
+    pub execution_mode: String,
     pub instrument_id: Uuid,
     pub template_version_id: Uuid,
     pub idempotency_key: String,
@@ -22,6 +25,7 @@ pub struct NewExecutionTask {
     pub slice_interval_ms: i64,
     pub start_at: DateTime<Utc>,
     pub deadline_at: DateTime<Utc>,
+    pub requested_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +66,7 @@ pub struct StoredExecutionTask {
 #[derive(Debug, Clone)]
 pub struct SliceRecord {
     pub task_id: Uuid,
+    pub child_order_id: Option<Uuid>,
     pub sequence: i32,
     pub requested_amount: Decimal,
     pub native_quantity: Decimal,
@@ -87,6 +92,7 @@ pub struct SliceRecord {
 pub struct StoredExecutionSlice {
     pub id: Uuid,
     pub task_id: Uuid,
+    pub child_order_id: Option<Uuid>,
     pub sequence: i32,
     pub requested_amount: Decimal,
     pub native_quantity: Decimal,
@@ -119,7 +125,7 @@ pub async fn create_task(
     pool: &DatabasePool,
     new_task: NewExecutionTask,
 ) -> Result<StoredExecutionTask, sqlx::Error> {
-    let id = Uuid::now_v7();
+    let id = new_task.id;
     let mut transaction = pool.begin().await?;
     let inserted = sqlx::query(
         r#"
@@ -127,28 +133,36 @@ pub async fn create_task(
             id, account_id, instrument_id, template_version_id, idempotency_key, side, strategy_kind,
             strategy_params, status, version, deadline_at, next_tick_at,
             execution_mode, requested_amount, quantity_unit, residual_amount,
-            max_slippage_bps, slice_interval_ms
+            max_slippage_bps, slice_interval_ms, requested_by
         ) VALUES (
-            $1, 'paper', $2, $3, $4, $5, $6, $7, 'scheduled', 0, $8, $9,
-            'paper', $10, $11, $10, $12, $13
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, $11,
+            $12, $13, $14, $13, $15, $16, $17
         )
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING *
         "#,
     )
     .bind(id)
+    .bind(&new_task.account_id)
     .bind(new_task.instrument_id)
     .bind(new_task.template_version_id)
     .bind(&new_task.idempotency_key)
     .bind(side_text(new_task.side))
     .bind(strategy_text(new_task.strategy_kind))
     .bind(new_task.strategy_params)
+    .bind(if new_task.execution_mode == "live" {
+        "pending_approval"
+    } else {
+        "scheduled"
+    })
     .bind(new_task.deadline_at)
     .bind(new_task.start_at)
+    .bind(&new_task.execution_mode)
     .bind(new_task.requested_amount)
     .bind(quantity_unit_text(new_task.quantity_unit))
     .bind(new_task.max_slippage_bps)
     .bind(new_task.slice_interval_ms)
+    .bind(&new_task.requested_by)
     .fetch_optional(&mut *transaction)
     .await?;
 
@@ -201,6 +215,39 @@ pub async fn list_tasks(
         .iter()
         .map(row_to_task)
         .collect()
+}
+
+pub async fn list_pending_approval_tasks(
+    pool: &DatabasePool,
+    limit: i64,
+) -> Result<Vec<StoredExecutionTask>, sqlx::Error> {
+    if limit <= 0 {
+        return Err(sqlx::Error::Protocol("approval_query_invalid".into()));
+    }
+    let rows = sqlx::query(
+        "SELECT * FROM execution_tasks WHERE status = 'pending_approval' ORDER BY created_at LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_task).collect()
+}
+
+pub async fn count_active_tasks(pool: &DatabasePool, account_id: &str) -> Result<i64, sqlx::Error> {
+    if account_id.trim().is_empty() {
+        return Err(sqlx::Error::Protocol("account_id_required".into()));
+    }
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM execution_tasks
+        WHERE account_id = $1
+          AND status IN ('pending_approval', 'scheduled', 'running', 'paused', 'cancelling')
+        "#,
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
 }
 
 pub async fn list_runnable_tasks(
@@ -320,7 +367,7 @@ pub async fn cancel_task(pool: &DatabasePool, id: Uuid) -> Result<bool, sqlx::Er
         r#"
         UPDATE execution_tasks
         SET status = 'cancelled', version = version + 1, updated_at = now()
-        WHERE id = $1 AND status IN ('scheduled', 'running', 'paused', 'cancelling')
+        WHERE id = $1 AND status IN ('pending_approval', 'scheduled', 'running', 'paused', 'cancelling')
         "#,
     )
     .bind(id)
@@ -453,17 +500,18 @@ pub async fn record_slice(pool: &DatabasePool, slice: SliceRecord) -> Result<(),
     sqlx::query(
         r#"
         INSERT INTO execution_slices (
-            id, task_id, sequence, requested_amount, native_quantity,
+            id, task_id, child_order_id, sequence, requested_amount, native_quantity,
             filled_native_quantity, filled_base_quantity, filled_quote_quantity,
             average_price, worst_price, slippage_bps, fee_amount, fee_asset,
             fee_status, status, market_snapshot, decision_input
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
         )
         "#,
     )
     .bind(slice_id)
     .bind(slice.task_id)
+    .bind(slice.child_order_id)
     .bind(slice.sequence)
     .bind(slice.requested_amount)
     .bind(slice.native_quantity)
@@ -574,6 +622,7 @@ fn row_to_slice(row: &sqlx::postgres::PgRow) -> Result<StoredExecutionSlice, sql
     Ok(StoredExecutionSlice {
         id: row.try_get("id")?,
         task_id: row.try_get("task_id")?,
+        child_order_id: row.try_get("child_order_id")?,
         sequence: row.try_get("sequence")?,
         requested_amount: row.try_get("requested_amount")?,
         native_quantity: row.try_get("native_quantity")?,

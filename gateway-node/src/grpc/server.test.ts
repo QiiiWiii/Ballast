@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type * as grpc from "@grpc/grpc-js";
 import pino from "pino";
 
 import type { GetOrderByClientIdRequest__Output } from "../generated/ballast/gateway/v1/GetOrderByClientIdRequest.js";
@@ -20,14 +19,18 @@ test("health reports the packaged gateway version without npm environment variab
   }
 });
 
-test("trading server routes GetOrderByClientId while keeping mutations disabled", async () => {
+test("trading server routes private order commands", async () => {
   const expected = { clientOrderId: "clientOrder1" } as OrderSnapshot;
   let received: GetOrderByClientIdRequest__Output | undefined;
+  let placed = false;
   const handlers = createTradingHandlers({
+    placeIocOrder: async () => { placed = true; return expected; },
     getOrderByClientId: async (request) => {
       received = request;
       return expected;
     },
+    cancelOrder: async () => expected,
+    watchOrderEvents: async () => undefined,
   }, pino({ enabled: false }));
   const request = { requestId: "request-1", clientOrderId: "clientOrder1" };
 
@@ -41,10 +44,14 @@ test("trading server routes GetOrderByClientId while keeping mutations disabled"
   assert.equal(response, expected);
 
   await new Promise<void>((resolve, reject) => {
-    handlers.PlaceIocOrder({} as never, (error) => {
+    handlers.PlaceIocOrder({} as never, (error, value) => {
       try {
-        assert.equal((error as grpc.ServiceError).details, "private_services_disabled");
-        resolve();
+        if (error) reject(error);
+        else {
+          assert.equal(value, expected);
+          assert.equal(placed, true);
+          resolve();
+        }
       } catch (assertionError) {
         reject(assertionError);
       }

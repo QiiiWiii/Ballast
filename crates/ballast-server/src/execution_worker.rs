@@ -1,26 +1,37 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    num::NonZeroU32,
     str::FromStr,
     sync::Arc,
     time::Duration,
 };
 
-use ballast_core::{Instrument, QuantityUnit, Side, StrategyKind};
-use ballast_execution::{ManagedSliceInput, calculate_managed_slice, protected_conversion_price};
-use ballast_gateway_client::{GatewayClient, proto};
+use ballast_core::{Exchange, Instrument, QuantityUnit, Side, StrategyKind};
+use ballast_execution::{
+    ManagedSliceInput, OrderState, calculate_managed_slice, protected_conversion_price,
+    stable_client_order_id,
+};
+use ballast_gateway_client::{
+    GatewayClient, GatewayClientError, execution_order_snapshot_from_proto, proto,
+};
 use ballast_simulator::{BookLevel, estimate_protected_ioc_fill};
-use ballast_storage::{DatabasePool, SliceRecord, StoredExecutionTask};
+use ballast_storage::{
+    ChildOrderStateUpdate, DatabasePool, NewChildOrder, SliceRecord, StoredExecutionTask,
+    compare_and_set_child_order_state, create_or_get_child_order, get_account,
+};
 use chrono::{DateTime, Utc};
 use futures_util::stream::{self, StreamExt};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock};
+use tonic::Code;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
     metrics::AppMetrics,
     order_book_cache::{MAX_BOOK_AGE_MS, OrderBookCache},
+    risk::{self, RiskContext, RiskError, RiskStage},
 };
 
 #[derive(Clone, Default)]
@@ -364,6 +375,17 @@ async fn process_task(
         .await?
         .ok_or("task instrument no longer exists")?;
     let instrument = stored_instrument.instrument;
+    if task.execution_mode == "live" && instrument.id.exchange != Exchange::Okx {
+        ballast_storage::mark_task_state(
+            database,
+            task.id,
+            "failed",
+            Some("live_order_exchange_unsupported"),
+            task.deadline_at,
+        )
+        .await?;
+        return Ok(());
+    }
     let side = parse_side(&task.side)?;
     let unit = parse_quantity_unit(&task.quantity_unit)?;
     let strategy_kind = parse_strategy(&task.strategy_kind)?;
@@ -484,6 +506,25 @@ async fn process_task(
         }
         return Ok(());
     }
+    if task.execution_mode == "live" {
+        return process_live_slice(
+            database,
+            gateway,
+            &task,
+            &instrument,
+            side,
+            unit,
+            strategy_kind,
+            requested_slice,
+            remaining,
+            market_volume,
+            native_quantity,
+            reference_price,
+            order_book,
+            metrics,
+        )
+        .await;
+    }
     let bids: Vec<_> = order_book
         .bids
         .iter()
@@ -539,6 +580,7 @@ async fn process_task(
         database,
         SliceRecord {
             task_id: task.id,
+            child_order_id: None,
             sequence,
             requested_amount: requested_slice,
             native_quantity,
@@ -576,6 +618,532 @@ async fn process_task(
         metrics.slice_slippage_bps.observe(slippage);
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_live_slice(
+    database: &DatabasePool,
+    gateway: &GatewayClient,
+    task: &StoredExecutionTask,
+    instrument: &Instrument,
+    side: Side,
+    unit: QuantityUnit,
+    strategy_kind: StrategyKind,
+    requested_slice: Decimal,
+    remaining: Decimal,
+    market_volume: Decimal,
+    native_quantity: Decimal,
+    reference_price: Decimal,
+    order_book: ballast_gateway_client::OrderBook,
+    _metrics: &AppMetrics,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let account = get_account(database, &task.account_id)
+        .await?
+        .ok_or("live task account no longer exists")?;
+    let _submit_lock = risk::acquire_submit_lock(database).await?;
+    let limit_price = protected_limit_price(side, reference_price, task.max_slippage_bps);
+    if limit_price <= Decimal::ZERO {
+        ballast_storage::mark_task_state(
+            database,
+            task.id,
+            "failed",
+            Some("protected_price_invalid"),
+            task.deadline_at,
+        )
+        .await?;
+        return Ok(());
+    }
+    let conversion_price =
+        protected_conversion_price(side, unit, reference_price, task.max_slippage_bps);
+    let full_native_quantity =
+        instrument.target_to_native_quantity(task.requested_amount, unit, conversion_price)?;
+    let task_notional =
+        instrument.native_to_quote_quantity(full_native_quantity, reference_price)?;
+    let order_notional = instrument.native_to_quote_quantity(native_quantity, limit_price)?;
+    let snapshot = risk::latest_snapshot(database, &task.account_id).await?;
+    let current_exposure = risk::snapshot_exposure(snapshot.as_ref(), &instrument.id.symbol)
+        .map_err(|code| code.to_owned())?;
+    let account_age_ms = risk::snapshot_age_ms(snapshot.as_ref()).map_err(str::to_owned)?;
+    let projected_exposure = instrument
+        .native_to_base_quantity(native_quantity, limit_price)?
+        .abs();
+    let market_age_ms = (Utc::now().timestamp_millis() - order_book.gateway_received_at_ms).max(0);
+    let exchange = exchange_text(instrument.id.exchange);
+    if let Err(error) = risk::check(
+        database,
+        RiskStage::Submit,
+        &RiskContext {
+            task_id: Some(task.id),
+            account_id: task.account_id.clone(),
+            exchange: exchange.to_owned(),
+            instrument_id: task.instrument_id,
+            backend: task.execution_backend.clone(),
+            order_notional,
+            task_notional,
+            market_age_ms,
+            account_age_ms,
+            max_slippage_bps: task.max_slippage_bps,
+            daily_notional: order_notional,
+            net_exposure: current_exposure + projected_exposure,
+            native_algo_orders: 0,
+            native_duration_seconds: 0,
+        },
+    )
+    .await
+    {
+        let reason = match error {
+            RiskError::Denied(code) => code,
+            RiskError::Database(_) => "risk_database_error",
+        };
+        ballast_storage::mark_task_state(
+            database,
+            task.id,
+            "failed",
+            Some(reason),
+            task.deadline_at,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let sequence = ballast_storage::next_slice_sequence(database, task.id).await?;
+    let sequence = NonZeroU32::new(u32::try_from(sequence).map_err(|_| "slice_sequence_overflow")?)
+        .ok_or("slice_sequence_invalid")?;
+    let client_order_id = stable_client_order_id(task.id, sequence);
+    let child = create_or_get_child_order(
+        database,
+        &NewChildOrder {
+            task_id: task.id,
+            exchange: exchange.to_owned(),
+            account_id: task.account_id.clone(),
+            request_id: Uuid::now_v7(),
+            client_order_id: client_order_id.clone(),
+            side: side_text(side).to_owned(),
+            order_type: "limit_ioc".to_owned(),
+            order_backend: "managed_ioc".to_owned(),
+            quantity: native_quantity,
+            limit_price: Some(limit_price),
+        },
+    )
+    .await?;
+    let child_is_pending = child.status == OrderState::SubmissionPending;
+    if !child_is_pending && !child.status.is_terminal() {
+        pause_live_task(database, task, child.status.as_str()).await?;
+        return Ok(());
+    }
+
+    let account_ref = proto::AccountRef {
+        account_id: account.id.clone(),
+        exchange: exchange_proto(instrument.id.exchange),
+        environment: account_environment_proto(&account.environment)?,
+    };
+    let instrument_key = proto::InstrumentKey {
+        exchange: exchange_proto(instrument.id.exchange),
+        market_kind: market_kind_proto(instrument.id.market_kind),
+        symbol: instrument.id.symbol.clone(),
+    };
+    let lookup = || proto::GetOrderByClientIdRequest {
+        account: Some(account_ref.clone()),
+        instrument: Some(instrument_key.clone()),
+        request_id: Uuid::now_v7().to_string(),
+        client_order_id: client_order_id.clone(),
+    };
+    let response = match gateway.get_order_by_client_id(lookup()).await {
+        Ok(response) => response,
+        Err(error) if is_not_found(&error) && child_is_pending => {
+            match gateway
+                .place_ioc(proto::PlaceIocOrderRequest {
+                    account: Some(account_ref),
+                    instrument: Some(instrument_key),
+                    request_id: Uuid::now_v7().to_string(),
+                    client_order_id: client_order_id.clone(),
+                    side: side_proto(side),
+                    quantity: native_quantity.to_string(),
+                    limit_price: limit_price.to_string(),
+                })
+                .await
+            {
+                Ok(response) => response,
+                Err(error) if is_unknown_submission(&error) => {
+                    mark_submission_unknown(database, task, &child, "submit_result_unknown")
+                        .await?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    mark_submission_failed(database, task, &child, gateway_error_code(&error))
+                        .await?;
+                    return Ok(());
+                }
+            }
+        }
+        Err(error) if is_not_found(&error) => {
+            ballast_storage::mark_task_state(
+                database,
+                task.id,
+                "failed",
+                Some("terminal_order_not_found"),
+                task.deadline_at,
+            )
+            .await?;
+            warn!(%error, task_id = %task.id, client_order_id = %client_order_id, "terminal live order disappeared from the venue");
+            return Ok(());
+        }
+        Err(error) => {
+            if child_is_pending {
+                mark_submission_unknown(database, task, &child, "pre_submit_query_unknown").await?;
+            }
+            warn!(%error, task_id = %task.id, client_order_id = %client_order_id, "live order query was inconclusive before submission");
+            return Ok(());
+        }
+    };
+    validate_live_response(
+        task,
+        instrument,
+        side,
+        native_quantity,
+        &client_order_id,
+        &response,
+    )?;
+    let snapshot = execution_order_snapshot_from_proto(response.clone())?;
+    compare_and_set_child_order_state(
+        database,
+        &child.exchange,
+        &child.account_id,
+        &child.client_order_id,
+        &[child.status],
+        &ChildOrderStateUpdate {
+            status: snapshot.state,
+            exchange_order_id: snapshot.exchange_order_id.clone(),
+            filled_quantity: snapshot.filled_quantity,
+            average_price: snapshot.average_price,
+            limit_price: child.limit_price,
+            raw_status: None,
+            state_reason: response.reason_code.clone(),
+            submitted_at: child.submitted_at.or(Some(Utc::now())),
+            last_reconciled_at: Some(snapshot.observed_at),
+        },
+    )
+    .await?;
+    if snapshot.state.is_terminal() {
+        record_live_slice(
+            database,
+            task,
+            instrument,
+            side,
+            unit,
+            strategy_kind,
+            requested_slice,
+            remaining,
+            market_volume,
+            native_quantity,
+            reference_price,
+            child.id,
+            &order_book,
+            &snapshot,
+        )
+        .await?;
+    } else {
+        pause_live_task(database, task, snapshot.state.as_str()).await?;
+    }
+    Ok(())
+}
+
+async fn mark_submission_unknown(
+    database: &DatabasePool,
+    task: &StoredExecutionTask,
+    child: &ballast_storage::StoredChildOrder,
+    reason: &'static str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    compare_and_set_child_order_state(
+        database,
+        &child.exchange,
+        &child.account_id,
+        &child.client_order_id,
+        &[child.status],
+        &ChildOrderStateUpdate {
+            status: OrderState::SubmissionUnknown,
+            exchange_order_id: child.exchange_order_id.clone(),
+            filled_quantity: child.filled_quantity,
+            average_price: child.average_price,
+            limit_price: child.limit_price,
+            raw_status: None,
+            state_reason: Some(reason.to_owned()),
+            submitted_at: child.submitted_at,
+            last_reconciled_at: Some(Utc::now()),
+        },
+    )
+    .await?;
+    pause_live_task(database, task, "submission_unknown").await?;
+    Ok(())
+}
+
+async fn mark_submission_failed(
+    database: &DatabasePool,
+    task: &StoredExecutionTask,
+    child: &ballast_storage::StoredChildOrder,
+    reason: &'static str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    compare_and_set_child_order_state(
+        database,
+        &child.exchange,
+        &child.account_id,
+        &child.client_order_id,
+        &[child.status],
+        &ChildOrderStateUpdate {
+            status: OrderState::Failed,
+            exchange_order_id: child.exchange_order_id.clone(),
+            filled_quantity: child.filled_quantity,
+            average_price: child.average_price,
+            limit_price: child.limit_price,
+            raw_status: None,
+            state_reason: Some(reason.to_owned()),
+            submitted_at: child.submitted_at,
+            last_reconciled_at: Some(Utc::now()),
+        },
+    )
+    .await?;
+    ballast_storage::mark_task_state(database, task.id, "failed", Some(reason), task.deadline_at)
+        .await?;
+    Ok(())
+}
+
+async fn pause_live_task(
+    database: &DatabasePool,
+    task: &StoredExecutionTask,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    ballast_storage::mark_task_state(
+        database,
+        task.id,
+        "paused",
+        Some(reason),
+        next_tick(task, Utc::now()),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_live_slice(
+    database: &DatabasePool,
+    task: &StoredExecutionTask,
+    instrument: &Instrument,
+    side: Side,
+    unit: QuantityUnit,
+    strategy_kind: StrategyKind,
+    requested_slice: Decimal,
+    remaining: Decimal,
+    market_volume: Decimal,
+    native_quantity: Decimal,
+    reference_price: Decimal,
+    child_order_id: Uuid,
+    order_book: &ballast_gateway_client::OrderBook,
+    snapshot: &ballast_execution::OrderSnapshot,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let filled_native_quantity = snapshot.filled_quantity;
+    let average_price = if filled_native_quantity.is_zero() {
+        None
+    } else {
+        Some(
+            snapshot
+                .average_price
+                .ok_or("live_fill_average_price_missing")?,
+        )
+    };
+    let filled_base_quantity = average_price
+        .map(|price| instrument.native_to_base_quantity(filled_native_quantity, price))
+        .transpose()?
+        .unwrap_or(Decimal::ZERO);
+    let filled_quote_quantity = average_price
+        .map(|price| instrument.native_to_quote_quantity(filled_native_quantity, price))
+        .transpose()?
+        .unwrap_or(Decimal::ZERO);
+    let executed_delta = match unit {
+        QuantityUnit::Contracts => filled_native_quantity,
+        QuantityUnit::BaseQuantity => filled_base_quantity,
+        QuantityUnit::QuoteNotional => filled_quote_quantity,
+    };
+    let residual = (remaining - executed_delta).max(Decimal::ZERO);
+    let residual_native = instrument.target_to_native_quantity(
+        residual,
+        unit,
+        protected_conversion_price(side, unit, reference_price, task.max_slippage_bps),
+    )?;
+    let rejected = matches!(snapshot.state, OrderState::Rejected | OrderState::Failed);
+    let task_status = if rejected {
+        "failed"
+    } else if residual.is_zero()
+        || !is_native_quantity_executable(instrument, residual_native, reference_price)?
+    {
+        "completed"
+    } else {
+        "running"
+    };
+    let slice_status = if rejected {
+        "rejected"
+    } else if filled_native_quantity.is_zero() {
+        "unfilled"
+    } else if residual.is_zero() {
+        "filled"
+    } else {
+        "partial"
+    };
+    let sequence = ballast_storage::next_slice_sequence(database, task.id).await?;
+    ballast_storage::record_slice(
+        database,
+        SliceRecord {
+            task_id: task.id,
+            child_order_id: Some(child_order_id),
+            sequence,
+            requested_amount: requested_slice,
+            native_quantity,
+            filled_native_quantity,
+            filled_base_quantity,
+            filled_quote_quantity,
+            average_price,
+            worst_price: average_price,
+            slippage_bps: None,
+            fee_amount: None,
+            fee_asset: None,
+            fee_status: "unavailable",
+            status: slice_status,
+            market_snapshot: market_snapshot(order_book),
+            decision_input: json!({
+                "execution_mode": "live",
+                "strategy": strategy_kind,
+                "remaining_amount": remaining.to_string(),
+                "market_volume": market_volume.to_string(),
+                "reference_price": reference_price.to_string(),
+                "max_slippage_bps": task.max_slippage_bps,
+            }),
+            executed_amount_delta: executed_delta,
+            residual_amount: residual,
+            next_tick_at: if task_status == "completed" {
+                task.deadline_at
+            } else {
+                next_tick(task, Utc::now())
+            },
+            task_status,
+        },
+    )
+    .await?;
+    ballast_storage::refresh_slice_fees(database, child_order_id).await?;
+    Ok(())
+}
+
+fn validate_live_response(
+    task: &StoredExecutionTask,
+    instrument: &Instrument,
+    side: Side,
+    quantity: Decimal,
+    client_order_id: &str,
+    response: &proto::OrderSnapshot,
+) -> Result<(), &'static str> {
+    let account = response
+        .account
+        .as_ref()
+        .ok_or("live_order_account_missing")?;
+    if account.account_id != task.account_id
+        || account.exchange != exchange_proto(instrument.id.exchange)
+    {
+        return Err("live_order_account_mismatch");
+    }
+    let response_instrument = response
+        .instrument
+        .as_ref()
+        .ok_or("live_order_instrument_missing")?;
+    if response_instrument.exchange != exchange_proto(instrument.id.exchange)
+        || response_instrument.market_kind != market_kind_proto(instrument.id.market_kind)
+        || response_instrument.symbol != instrument.id.symbol
+    {
+        return Err("live_order_instrument_mismatch");
+    }
+    if response.client_order_id != client_order_id {
+        return Err("live_order_client_id_missing");
+    }
+    if response.side != side_proto(side) {
+        return Err("live_order_side_mismatch");
+    }
+    let observed_quantity =
+        Decimal::from_str(&response.quantity).map_err(|_| "live_order_quantity_invalid")?;
+    if observed_quantity != quantity {
+        return Err("live_order_quantity_mismatch");
+    }
+    Ok(())
+}
+
+fn protected_limit_price(side: Side, reference_price: Decimal, max_slippage_bps: i32) -> Decimal {
+    let ratio = Decimal::from(max_slippage_bps) / Decimal::from(10_000);
+    match side {
+        Side::Buy => reference_price * (Decimal::ONE + ratio),
+        Side::Sell => reference_price * (Decimal::ONE - ratio),
+    }
+}
+
+fn is_not_found(error: &GatewayClientError) -> bool {
+    matches!(error, GatewayClientError::Rpc(status) if status.code() == Code::NotFound)
+}
+
+fn is_unknown_submission(error: &GatewayClientError) -> bool {
+    match error {
+        GatewayClientError::Transport(_) => true,
+        GatewayClientError::Rpc(status) => matches!(
+            status.code(),
+            Code::Unavailable | Code::DeadlineExceeded | Code::ResourceExhausted
+        ),
+        _ => false,
+    }
+}
+
+fn gateway_error_code(error: &GatewayClientError) -> &'static str {
+    match error {
+        GatewayClientError::Transport(_) => "gateway_transport_failed",
+        GatewayClientError::Rpc(status) => match status.code() {
+            Code::InvalidArgument => "gateway_order_invalid",
+            Code::FailedPrecondition => "gateway_order_rejected",
+            Code::PermissionDenied | Code::Unauthenticated => "gateway_order_access_denied",
+            _ => "gateway_order_submit_failed",
+        },
+        _ => "gateway_order_protocol_invalid",
+    }
+}
+
+fn exchange_proto(value: ballast_core::Exchange) -> i32 {
+    match value {
+        ballast_core::Exchange::Binance => proto::Exchange::Binance as i32,
+        ballast_core::Exchange::Okx => proto::Exchange::Okx as i32,
+        ballast_core::Exchange::Bybit => proto::Exchange::Bybit as i32,
+        ballast_core::Exchange::GateIo => proto::Exchange::GateIo as i32,
+        ballast_core::Exchange::Bitget => proto::Exchange::Bitget as i32,
+    }
+}
+
+fn market_kind_proto(value: ballast_core::MarketKind) -> i32 {
+    match value {
+        ballast_core::MarketKind::Spot => proto::MarketKind::Spot as i32,
+        ballast_core::MarketKind::Perpetual => proto::MarketKind::Perpetual as i32,
+    }
+}
+
+fn account_environment_proto(value: &str) -> Result<i32, &'static str> {
+    match value {
+        "demo" => Ok(proto::AccountEnvironment::Demo as i32),
+        "production" => Ok(proto::AccountEnvironment::Production as i32),
+        _ => Err("live_account_environment_invalid"),
+    }
+}
+
+fn side_proto(value: Side) -> i32 {
+    match value {
+        Side::Buy => proto::Side::Buy as i32,
+        Side::Sell => proto::Side::Sell as i32,
+    }
+}
+
+fn side_text(value: Side) -> &'static str {
+    match value {
+        Side::Buy => "buy",
+        Side::Sell => "sell",
+    }
 }
 
 fn strategy_decimal(

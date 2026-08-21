@@ -15,11 +15,11 @@
 - 可恢复公共历史回补
 - Compose 预构建多架构镜像、备份与 Prometheus；生产域名前置 Caddy 可独立部署
 
-明确未启用：
+默认未启用（需要 P0 全部通过并显式设置 `BALLAST_LIVE_ENABLED=true`）：
 
 - 交易所私有账户、真实下单与原生算法提交
-- 生产限额、kill switch 运行时、订单对账闭环
-- `BALLAST_LIVE_ENABLED=true`（服务检测到该值会拒绝启动）
+- 生产账户、风险限额、kill switch 和真实订单运行时
+- 未满足启动前置条件时的 `BALLAST_LIVE_ENABLED=true`
 
 OIDC / RBAC 已实现并可选启用；公开 paper 模式可留空，目标 provider 的端到端验收仍待完成。
 
@@ -73,17 +73,18 @@ OIDC / RBAC 已实现并可选启用；公开 paper 模式可留空，目标 pro
 
 #### P0.2 密钥与私有网关
 
-状态：进行中（OKX secret 装配与只读账户快照已进入实现；私有流与其他交易所待接）
+状态：OKX 首所代码已接入；目标凭证与受控环境验收待完成，其他交易所保持显式不支持
 
 - 交易所只读/交易密钥仅经 secrets 挂载，不入仓库、日志、错误体、数据库明文
-- `private_gateway` 中 `AccountService` / `TradingService` 按单交易所适配启用，能力缺失显式失败
+- `private_gateway` 中 OKX `AccountService` / `TradingService` 按单交易所适配启用，能力缺失显式失败；其他交易所不降级
+- OKX 私有订单/成交流支持连接状态、断线重连和关闭状态
 - 网关仍不拥有策略、任务权威状态或风控决策
 
 验收：无私钥时私有 RPC 失败关闭；有密钥时账户快照与余额/仓位只读可读。
 
 #### P0.3 对账与不确定订单
 
-状态：进行中（Rust 订单状态机、稳定 `client_order_id`、原子持久化、OKX 查询适配器、逐单周期对账、账户级 open-order 差异和脱敏 webhook 告警已实现；unknown 订单及其它关键路径告警待接）
+状态：代码闭环已接入；模拟超时、真实凭证和受控环境验收待完成
 
 - 稳定 `client_order_id` 生成与持久化
 - 下单超时 / 网络中断 → `submission_unknown`，禁止盲目重试
@@ -97,13 +98,15 @@ OIDC / RBAC 已实现并可选启用；公开 paper 模式可留空，目标 pro
 
 建议首所：文档与地域可达性较好的一家（当前公开 smoke 以 OKX 等可达所为准，以部署出口实测为准）。
 
-- 价格保护 IOC 真实提交一条小额或沙盒单
+- 价格保护 IOC 真实提交一条小额或沙盒单（代码路径已实现，当前不自动调用真实接口）
 - 再扩展 managed 纸面同构的 live TWAP 切片（仍走 Ballast 调度，非 venue native）
 - 任务状态与切片、成交、手续费以十进制字符串入账
 
 验收：创建 →（审批若已开）→ 调度 → 成交/取消/失败全链路事件；残余与最小数量规则与 paper 语义一致且无静默改写。
 
 #### P0.5 零默认风控与 kill switch
+
+状态：代码与审计接口已接入；需配置三层限额、kill switch 并完成受控演练
 
 - 全局 / 交易所 / 账户限额默认 **0**；显式配置后才可下单
 - 创建、审批、提交前三次检查（见 ADR 0003）
@@ -113,6 +116,8 @@ OIDC / RBAC 已实现并可选启用；公开 paper 模式可留空，目标 pro
 验收：零限额下无法提交；打开限额后 kill switch 立即生效；审计可追溯。
 
 #### P0.6 审批与告警
+
+状态：双人审批 API、关键路径 webhook outbox 已接入；需完成 OIDC 角色和告警接收端验收
 
 - live 任务 `pending_approval`；创建者不可自批
 - 关键路径可配置（至少一种：webhook / 邮件 / 其它明确集成），覆盖 unknown 订单、对账差异、kill switch、连续提交失败

@@ -11,8 +11,9 @@ mod strategy_repository;
 mod task_repository;
 
 pub use alert_repository::{
-    ClaimedReconciliationWebhook, ReconciliationWebhookPayload, claim_reconciliation_webhooks,
-    complete_reconciliation_webhook, fail_reconciliation_webhook, retry_reconciliation_webhook,
+    ClaimedReconciliationWebhook, ReconciliationWebhookPayload, claim_execution_alerts,
+    claim_reconciliation_webhooks, complete_reconciliation_webhook, enqueue_system_alert,
+    fail_reconciliation_webhook, retry_reconciliation_webhook,
 };
 pub use historical_repository::{
     HistoricalCandle, HistoricalTrade, NewHistoricalBackfill, StoredHistoricalBackfill,
@@ -26,18 +27,21 @@ pub use instrument_repository::{
 };
 pub use live_repository::{
     LocalOpenOrderSummary, NewAccountSnapshot, StoredAccount, StoredAccountReconciliation,
-    StoredAccountSnapshot, StoredReconciliationDifference, StoredReconciliationRun,
-    StoredRiskDecision, StoredTaskApproval, StoredWsTicket, approve_task, consume_ws_ticket,
-    create_ws_ticket, list_accounts, list_recent_reconciliation_runs,
-    list_reconciliation_differences, list_risk_decisions, list_task_approvals,
-    record_account_reconciliation, record_failed_account_reconciliation, reject_task,
+    StoredAccountSnapshot, StoredKillSwitch, StoredReconciliationDifference,
+    StoredReconciliationRun, StoredRiskDecision, StoredRiskLimit, StoredTaskApproval,
+    StoredWsTicket, acquire_live_risk_lock, approve_task, consume_ws_ticket, create_ws_ticket,
+    get_account, get_latest_account_snapshot, list_accounts, list_kill_switches,
+    list_recent_reconciliation_runs, list_reconciliation_differences, list_risk_decisions,
+    list_risk_limits, list_task_approvals, record_account_reconciliation,
+    record_failed_account_reconciliation, record_risk_decision, reject_task, upsert_kill_switch,
+    upsert_risk_limit,
 };
 pub use order_repository::{
-    ChildOrderStateUpdate, ClaimedChildOrderReconciliation, NewChildOrder, StoredChildOrder,
-    claim_child_orders_for_reconciliation, compare_and_set_child_order_state,
+    ChildOrderStateUpdate, ClaimedChildOrderReconciliation, NewChildOrder, NewFill,
+    StoredChildOrder, claim_child_orders_for_reconciliation, compare_and_set_child_order_state,
     complete_child_order_reconciliation, create_or_get_child_order,
     fail_child_order_reconciliation, get_child_order_by_client_order_id, list_account_open_orders,
-    suspend_child_order_reconciliation,
+    list_task_open_orders, record_fill, refresh_slice_fees, suspend_child_order_reconciliation,
 };
 pub use strategy_repository::{
     NewStrategyTemplate, NewStrategyTemplateVersion, StoredStrategyTemplate,
@@ -47,9 +51,9 @@ pub use strategy_repository::{
 };
 pub use task_repository::{
     NewExecutionTask, SliceRecord, StoredExecutionEvent, StoredExecutionSlice, StoredExecutionTask,
-    cancel_task, claim_runnable_tasks, create_task, defer_task_tick, get_task, list_events_after,
-    list_runnable_tasks, list_slices, list_task_events, list_tasks, mark_task_state,
-    next_slice_sequence, record_slice,
+    cancel_task, claim_runnable_tasks, count_active_tasks, create_task, defer_task_tick, get_task,
+    list_events_after, list_pending_approval_tasks, list_runnable_tasks, list_slices,
+    list_task_events, list_tasks, mark_task_state, next_slice_sequence, record_slice,
 };
 
 pub type DatabasePool = sqlx::PgPool;

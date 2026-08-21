@@ -77,8 +77,18 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/v1/live/readiness", get(live::live_readiness))
         .route("/api/v1/accounts", get(live::list_accounts))
-        .route("/api/v1/approvals", get(live::private_plane_locked))
-        .route("/api/v1/risk", get(live::private_plane_locked))
+        .route("/api/v1/approvals", get(live::list_approvals))
+        .route(
+            "/api/v1/approvals/{task_id}/approve",
+            post(live::approve_task),
+        )
+        .route(
+            "/api/v1/approvals/{task_id}/reject",
+            post(live::reject_task),
+        )
+        .route("/api/v1/risk", get(live::risk_state))
+        .route("/api/v1/risk/limits", post(live::set_risk_limit))
+        .route("/api/v1/risk/kill-switches", post(live::set_kill_switch))
         .route("/api/v1/hedges", get(live::private_plane_locked))
         .route("/api/v1/events", get(events::list_events))
         .route("/api/v1/ws-tickets", post(crate::auth::issue_ws_ticket))

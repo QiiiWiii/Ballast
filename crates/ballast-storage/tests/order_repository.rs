@@ -65,6 +65,9 @@ async fn child_order_intent_and_state_convergence_are_atomic() {
     let task = ballast_storage::create_task(
         &pool,
         NewExecutionTask {
+            id: Uuid::now_v7(),
+            account_id: "paper".to_owned(),
+            execution_mode: "paper".to_owned(),
             instrument_id: stored_instrument.id,
             template_version_id: template_version.id,
             idempotency_key: format!("order-repository-task-{test_suffix}"),
@@ -77,6 +80,7 @@ async fn child_order_intent_and_state_convergence_are_atomic() {
             slice_interval_ms: 1_000,
             start_at,
             deadline_at: start_at + Duration::minutes(1),
+            requested_by: None,
         },
     )
     .await

@@ -13,11 +13,11 @@ test("only OKX advertises query-by-client-order-id capability", () => {
     Exchange.EXCHANGE_BITGET,
   ]) {
     const capabilities = tradingCapabilities({ exchange });
-    assert.equal(capabilities.placeIoc, false);
+    assert.equal(capabilities.placeIoc, exchange === Exchange.EXCHANGE_OKX);
     assert.equal(capabilities.queryByClientOrderId, exchange === Exchange.EXCHANGE_OKX);
-    assert.equal(capabilities.cancelOrder, false);
-    assert.equal(capabilities.privateOrderStream, false);
-    assert.equal(capabilities.privateFillStream, false);
+    assert.equal(capabilities.cancelOrder, exchange === Exchange.EXCHANGE_OKX);
+    assert.equal(capabilities.privateOrderStream, exchange === Exchange.EXCHANGE_OKX);
+    assert.equal(capabilities.privateFillStream, exchange === Exchange.EXCHANGE_OKX);
   }
 });
 

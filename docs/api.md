@@ -55,6 +55,8 @@
 
 策略、数量单位、持续时间、切片周期和保护参数全部取自模板版本。归档模板不能创建新任务。
 
+默认请求创建 paper 任务。live 任务必须显式提供 `execution_mode: "live"` 和 `account_id`，由 `operator` 创建后进入 `pending_approval`；`admin` 审批时不能与创建者相同。三次风险检查和生产开关均由服务端执行，客户端不能绕过。
+
 ## 策略模板
 
 - `GET/POST /api/v1/strategy-templates`
@@ -72,18 +74,24 @@
 - `GET /api/v1/live/readiness`
 - `GET /api/v1/accounts`
 - `GET /api/v1/approvals`
+- `POST /api/v1/approvals/{task_id}/approve`
+- `POST /api/v1/approvals/{task_id}/reject`
 - `GET /api/v1/risk`
+- `POST /api/v1/risk/limits`
+- `POST /api/v1/risk/kill-switches`
 - `GET /api/v1/hedges`
 
 配置 `BALLAST_OIDC_ISSUER` 与 `BALLAST_OIDC_AUDIENCE` 后，非公开 `/api/v1` 路由需要 `Authorization: Bearer <jwt>`。角色声明默认读取 `ballast_roles`（可用 `BALLAST_OIDC_ROLE_CLAIM` 覆盖），取值为 `viewer` / `operator` / `admin`。读接口至少 `viewer`，写接口至少 `operator`，审批/风险写路径至少 `admin`。WebSocket 不使用长期 Bearer：先 `POST /api/v1/ws-tickets` 领取单次 ticket，再以 `Sec-WebSocket-Protocol: ballast-ticket, ballast-ticket-value.<ticket>` 连接 `/api/v1/ws`；ticket 消费后即失效，服务端只回显固定的 `ballast-ticket` 子协议。
 
 Web 部署同时配置 `BALLAST_OIDC_CLIENT_ID` 后使用 Authorization Code + PKCE。OIDC provider 需注册 `${BALLAST_PUBLIC_ORIGIN}/auth/callback` 为 redirect URI，并注册 `${BALLAST_PUBLIC_ORIGIN}/` 为 post-logout redirect URI。浏览器每次 WebSocket 建连或重连都会重新领取 ticket。
 
-配置 `BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL` 后，对账差异会通过 HTTPS webhook 发送脱敏摘要。载荷只包含版本、事件、账户标识、交易所、对账运行 ID、差异数量和差异类型集合，不包含余额、持仓、订单明细、凭证或 webhook 响应体；同一账户未变化的差异不会重复入队。
+配置 `BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL` 后，对账差异、unknown/失败订单和 kill switch 事件会通过 HTTPS webhook 发送脱敏摘要。载荷不包含余额、持仓、订单明细、凭证或 webhook 响应体；对账差异按账户指纹去重，执行关注事件只发送状态变化。
 
 原生算法能力接口只返回经过研究的能力状态。`documented_not_validated` 不代表可提交。
 
-`GET /api/v1/accounts` 已开放只读账户元数据和最近一次对账状态，不返回凭证名、余额、持仓或订单明细。OIDC 模式下至少需要 `viewer`；开放 paper 模式沿用现有开放读取行为。审批、风险和对冲接口仍返回 HTTP 423 与 `live_execution_disabled`。
+风险限额写入时还必须提供 `max_account_age_ms`；账户快照超过该年龄或没有可用快照时，创建、审批和提交风险检查都会拒绝 live 任务。
+
+`GET /api/v1/accounts` 已开放只读账户元数据和最近一次对账状态，不返回凭证名、余额、持仓或订单明细。OIDC 模式下至少需要 `viewer`；开放 paper 模式沿用现有开放读取行为。`GET /api/v1/approvals`、审批动作和风险配置接口已接入 P0 安全门；审批/风险写路径需要 `admin`，创建和撤销 live 任务需要 `operator`。对冲接口仍返回 HTTP 423 与 `live_execution_disabled`。
 
 ## 控制舱与分析
 

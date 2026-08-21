@@ -253,6 +253,22 @@ impl GatewayClient {
         Ok(client.get_order_by_client_id(request).await?.into_inner())
     }
 
+    pub async fn watch_order_events(
+        &self,
+        request: proto::WatchOrderEventsRequest,
+    ) -> Result<tonic::Streaming<proto::OrderEvent>, GatewayClientError> {
+        let mut client = self.trading.clone();
+        Ok(client.watch_order_events(request).await?.into_inner())
+    }
+
+    pub async fn cancel_order(
+        &self,
+        request: proto::CancelOrderRequest,
+    ) -> Result<proto::OrderSnapshot, GatewayClientError> {
+        let mut client = self.trading.clone();
+        Ok(client.cancel_order(request).await?.into_inner())
+    }
+
     pub async fn submit_algorithm(
         &self,
         request: proto::SubmitAlgoOrderRequest,

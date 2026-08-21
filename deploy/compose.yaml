@@ -40,7 +40,7 @@ services:
       BALLAST_CORS_ORIGIN: ${BALLAST_PUBLIC_ORIGIN:-http://localhost:8080}
       DATABASE_URL: postgres://ballast:${POSTGRES_PASSWORD:-ballast-local-only}@postgres:5432/ballast
       RUST_LOG: ${RUST_LOG:-ballast_server=info,tower_http=info}
-      BALLAST_LIVE_ENABLED: "false"
+      BALLAST_LIVE_ENABLED: ${BALLAST_LIVE_ENABLED:-false}
       BALLAST_PRIVATE_RECONCILIATION_ENABLED: "false"
       BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL: ${BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL:-}
       BALLAST_OIDC_ISSUER: ${BALLAST_OIDC_ISSUER:-}

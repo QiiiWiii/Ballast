@@ -42,12 +42,14 @@ import type { Trade } from "../generated/ballast/gateway/v1/Trade.js";
 import type { TradeStreamEvent } from "../generated/ballast/gateway/v1/TradeStreamEvent.js";
 import type { WatchMarketRequest__Output } from "../generated/ballast/gateway/v1/WatchMarketRequest.js";
 import type { AccountServiceHandlers } from "../generated/ballast/gateway/v1/AccountService.js";
+import type { AccountEvent } from "../generated/ballast/gateway/v1/AccountEvent.js";
 import type { AlgorithmicTradingServiceHandlers } from "../generated/ballast/gateway/v1/AlgorithmicTradingService.js";
 import type { AlgoCapabilities } from "../generated/ballast/gateway/v1/AlgoCapabilities.js";
 import type { GetAlgoCapabilitiesRequest__Output } from "../generated/ballast/gateway/v1/GetAlgoCapabilitiesRequest.js";
 import type { GetTradingCapabilitiesRequest__Output } from "../generated/ballast/gateway/v1/GetTradingCapabilitiesRequest.js";
 import type { TradingCapabilities } from "../generated/ballast/gateway/v1/TradingCapabilities.js";
 import type { TradingServiceHandlers } from "../generated/ballast/gateway/v1/TradingService.js";
+import type { OrderEvent } from "../generated/ballast/gateway/v1/OrderEvent.js";
 import {
   accountService,
   algorithmicTradingService,
@@ -161,7 +163,15 @@ export async function startGrpcServer(
 
   const accountHandlers: AccountServiceHandlers = {
     GetAccountSnapshot: asyncUnary((request) => privateAccountService.getSnapshot(request), logger),
-    WatchAccountEvents: disabledStream,
+    WatchAccountEvents: (call) => {
+      const controller = new AbortController();
+      call.on("cancelled", () => controller.abort());
+      void privateAccountService.watchAccountEvents(
+        call.request,
+        (event: AccountEvent) => { call.write(event); },
+        controller.signal,
+      ).then(() => call.end(), (error: unknown) => call.destroy(toServiceError(error)));
+    },
   };
   const tradingHandlers = createTradingHandlers(privateAccountService, logger);
   const algorithmicTradingHandlers: AlgorithmicTradingServiceHandlers = {
@@ -187,15 +197,23 @@ export async function startGrpcServer(
 }
 
 export function createTradingHandlers(
-  privateAccountService: Pick<PrivateAccountService, "getOrderByClientId">,
+  privateAccountService: Pick<PrivateAccountService, "getOrderByClientId" | "placeIocOrder" | "cancelOrder" | "watchOrderEvents">,
   logger: Logger,
 ): TradingServiceHandlers {
   return {
     GetTradingCapabilities: asyncUnary(async (request) => tradingCapabilities(request), logger),
-    PlaceIocOrder: disabledUnary,
+    PlaceIocOrder: asyncUnary((request) => privateAccountService.placeIocOrder(request), logger),
     GetOrderByClientId: asyncUnary((request) => privateAccountService.getOrderByClientId(request), logger),
-    CancelOrder: disabledUnary,
-    WatchOrderEvents: disabledStream,
+    CancelOrder: asyncUnary((request) => privateAccountService.cancelOrder(request), logger),
+    WatchOrderEvents: (call) => {
+      const controller = new AbortController();
+      call.on("cancelled", () => controller.abort());
+      void privateAccountService.watchOrderEvents(
+        call.request,
+        (event: OrderEvent) => { call.write(event); },
+        controller.signal,
+      ).then(() => call.end(), (error: unknown) => call.destroy(toServiceError(error)));
+    },
   };
 }
 
@@ -239,11 +257,11 @@ export function tradingCapabilities(
   const exchange = exchangeFromProto(request.exchange);
   return {
     exchange: exchangeToProto(exchange),
-    placeIoc: false,
+    placeIoc: exchange === "okx",
     queryByClientOrderId: exchange === "okx",
-    cancelOrder: false,
-    privateOrderStream: false,
-    privateFillStream: false,
+    cancelOrder: exchange === "okx",
+    privateOrderStream: exchange === "okx",
+    privateFillStream: exchange === "okx",
   };
 }
 

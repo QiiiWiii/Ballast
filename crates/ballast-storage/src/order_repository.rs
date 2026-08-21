@@ -7,6 +7,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::DatabasePool;
+use crate::alert_repository::enqueue_execution_alert;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewChildOrder {
@@ -58,6 +59,20 @@ pub struct ChildOrderStateUpdate {
     pub state_reason: Option<String>,
     pub submitted_at: Option<DateTime<Utc>>,
     pub last_reconciled_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewFill {
+    pub child_order_id: Uuid,
+    pub exchange: String,
+    pub account_id: String,
+    pub exchange_trade_id: String,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub fee: Decimal,
+    pub fee_status: &'static str,
+    pub fee_asset: Option<String>,
+    pub exchange_time: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +239,110 @@ pub async fn list_account_open_orders(
     .fetch_all(pool)
     .await?;
     rows.iter().map(row_to_child_order).collect()
+}
+
+pub async fn list_task_open_orders(
+    pool: &DatabasePool,
+    task_id: Uuid,
+) -> Result<Vec<StoredChildOrder>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT * FROM child_orders
+        WHERE task_id = $1
+          AND status IN (
+              'submission_pending', 'submission_unknown', 'open',
+              'partially_filled', 'cancel_pending'
+          )
+        ORDER BY created_at, id
+        "#,
+    )
+    .bind(task_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_child_order).collect()
+}
+
+pub async fn record_fill(pool: &DatabasePool, fill: &NewFill) -> Result<bool, sqlx::Error> {
+    if fill.exchange.trim().is_empty()
+        || fill.account_id.trim().is_empty()
+        || fill.exchange_trade_id.trim().is_empty()
+        || fill.price <= Decimal::ZERO
+        || fill.quantity <= Decimal::ZERO
+        || fill.fee < Decimal::ZERO
+        || !matches!(fill.fee_status, "calculated" | "unavailable")
+    {
+        return Err(protocol_error("fill_payload_invalid"));
+    }
+    let result = sqlx::query(
+        r#"
+        INSERT INTO fills (
+            id, child_order_id, exchange, account_id, exchange_trade_id,
+            price, quantity, fee, fee_asset, fee_status, exchange_time
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (exchange, account_id, exchange_trade_id) DO NOTHING
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(fill.child_order_id)
+    .bind(&fill.exchange)
+    .bind(&fill.account_id)
+    .bind(&fill.exchange_trade_id)
+    .bind(fill.price)
+    .bind(fill.quantity)
+    .bind(fill.fee)
+    .bind(&fill.fee_asset)
+    .bind(fill.fee_status)
+    .bind(fill.exchange_time)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn refresh_slice_fees(
+    pool: &DatabasePool,
+    child_order_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT fee, fee_asset, fee_status FROM fills WHERE child_order_id = $1 ORDER BY exchange_trade_id",
+    )
+    .bind(child_order_id)
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    let mut amount = Decimal::ZERO;
+    let mut fee_asset: Option<String> = None;
+    let mut fee_asset_set = false;
+    let mut fee_status = "calculated";
+    for row in &rows {
+        let status: String = row.try_get("fee_status")?;
+        let asset: Option<String> = row.try_get("fee_asset")?;
+        if status != "calculated" || (fee_asset_set && fee_asset != asset) {
+            fee_status = "unavailable";
+        }
+        if !fee_asset_set {
+            fee_asset = asset;
+            fee_asset_set = true;
+        }
+        amount += row.try_get::<Decimal, _>("fee")?;
+    }
+    let fee_amount = (fee_status == "calculated").then_some(amount);
+    let fee_asset = (fee_status == "calculated").then_some(fee_asset).flatten();
+    let result = sqlx::query(
+        r#"
+        UPDATE execution_slices
+        SET fee_amount = $2, fee_asset = $3, fee_status = $4
+        WHERE child_order_id = $1
+        "#,
+    )
+    .bind(child_order_id)
+    .bind(fee_amount)
+    .bind(fee_asset)
+    .bind(fee_status)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn claim_child_orders_for_reconciliation(
@@ -526,6 +645,24 @@ pub async fn compare_and_set_child_order_state(
         }))
         .execute(&mut *transaction)
         .await?;
+        if matches!(
+            stored.status,
+            OrderState::SubmissionUnknown | OrderState::Failed
+        ) {
+            enqueue_execution_alert(
+                &mut transaction,
+                Some(stored.task_id),
+                &stored.account_id,
+                &stored.exchange,
+                Some(&stored.client_order_id),
+                "child_order_attention_required",
+                stored
+                    .state_reason
+                    .as_deref()
+                    .unwrap_or(stored.status.as_str()),
+            )
+            .await?;
+        }
     }
 
     transaction.commit().await?;

@@ -120,6 +120,18 @@ export const eventSchema = z.object({
   payload: z.record(z.string(), z.unknown()), created_at: timestamp,
 });
 
+export const approvalsSchema = z.object({ items: z.array(taskSchema), limit: z.number() });
+export const accountSchema = z.object({
+  id: z.string(), exchange: z.string(), label: z.string(), environment: z.string(), enabled: z.boolean(),
+  withdrawals_disabled: z.boolean(), ip_restricted: z.boolean(), latest_reconciliation: z.object({ status: z.string() }).passthrough().nullable(),
+});
+export const accountsSchema = z.array(accountSchema);
+export const riskStateSchema = z.object({
+  limits: z.array(z.unknown()),
+  kill_switches: z.array(z.unknown()),
+  decisions: z.array(z.unknown()),
+});
+
 export type ExchangeStatus = z.infer<typeof exchangeStatusSchema>;
 export type Instrument = z.infer<typeof instrumentSchema>;
 export type InstrumentPage = z.infer<typeof instrumentPageSchema>;
@@ -146,6 +158,7 @@ export interface TemplateInput {
 
 export interface CreateTaskInput {
   instrument_id: string; side: "buy" | "sell"; target_amount: string; template_version_id: string;
+  execution_mode?: "paper" | "live"; account_id?: string;
 }
 
 export interface InstrumentQuery {
@@ -202,6 +215,11 @@ export const api = {
     ...jsonRequest("POST", input), headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
   })),
   cancelTask: async (id: string) => taskSchema.parse(await request(`/api/v1/tasks/${id}/cancel`, jsonRequest("POST"))),
+  approvals: async () => approvalsSchema.parse(await request("/api/v1/approvals?limit=100")),
+  accounts: async () => accountsSchema.parse(await request("/api/v1/accounts")),
+  approveTask: async (id: string) => taskSchema.parse(await request(`/api/v1/approvals/${id}/approve`, jsonRequest("POST"))),
+  rejectTask: async (id: string, reason: string) => taskSchema.parse(await request(`/api/v1/approvals/${id}/reject`, jsonRequest("POST", { reason }))),
+  risk: async () => riskStateSchema.parse(await request("/api/v1/risk")),
   templates: async () => z.array(templateSchema).parse(await request("/api/v1/strategy-templates")),
   template: async (id: string) => templateSchema.parse(await request(`/api/v1/strategy-templates/${id}`)),
   createTemplate: async (input: TemplateInput) => templateSchema.parse(await request("/api/v1/strategy-templates", jsonRequest("POST", input))),

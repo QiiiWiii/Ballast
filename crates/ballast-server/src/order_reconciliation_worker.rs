@@ -180,7 +180,7 @@ async fn reconcile_one(
     let reason_code = response.reason_code.clone();
     let snapshot = execution_order_snapshot_from_proto(response)
         .map_err(|_| ReconciliationError::Permanent("gateway_order_protocol_invalid"))?;
-    compare_and_set_child_order_state(
+    let updated = compare_and_set_child_order_state(
         database,
         &claimed.order.exchange,
         &claimed.order.account_id,
@@ -200,6 +200,11 @@ async fn reconcile_one(
     )
     .await
     .map_err(storage_error)?;
+    if updated.status.is_terminal() {
+        ballast_storage::mark_task_state(database, updated.task_id, "running", None, Utc::now())
+            .await
+            .map_err(storage_error)?;
+    }
     if !complete_child_order_reconciliation(
         database,
         claimed.order.id,

@@ -559,13 +559,19 @@ pub enum GatewayClientError {
     #[error("gateway transport error: {0}")]
     Transport(#[from] tonic::transport::Error),
     #[error("gateway RPC failed: {0}")]
-    Rpc(#[from] Status),
+    Rpc(Box<Status>),
     #[error("gateway response is missing {0}")]
     MissingField(&'static str),
     #[error("gateway response contains invalid {0}")]
     InvalidField(&'static str),
     #[error("gateway response contains invalid decimal for {field}: {value}")]
     InvalidDecimal { field: &'static str, value: String },
+}
+
+impl From<Status> for GatewayClientError {
+    fn from(value: Status) -> Self {
+        Self::Rpc(Box::new(value))
+    }
 }
 
 #[cfg(test)]

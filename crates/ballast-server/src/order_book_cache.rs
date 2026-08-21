@@ -314,8 +314,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rest_cache_window_is_tighter_than_execution_stale_threshold() {
-        assert!(REST_CACHE_FRESH_MS < MAX_BOOK_AGE_MS);
+    fn cache_windows_are_stable() {
+        assert_eq!(REST_CACHE_FRESH_MS, 750);
         assert_eq!(MAX_BOOK_AGE_MS, 5_000);
     }
 }

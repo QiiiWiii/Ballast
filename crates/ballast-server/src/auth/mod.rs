@@ -199,7 +199,7 @@ pub async fn auth_middleware(
         Session::Open
     } else if is_ws {
         let raw = ws_ticket_from_headers(req.headers())?;
-        let principal = state.auth.tickets.consume(&raw).await?;
+        let principal = state.auth.tickets.consume(raw).await?;
         if !principal.has_at_least(Role::Viewer) {
             return Err(ApiError::forbidden("insufficient_role"));
         }

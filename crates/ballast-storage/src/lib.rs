@@ -22,7 +22,7 @@ pub use historical_repository::{
     persist_candle_batch, persist_trade_batch,
 };
 pub use instrument_repository::{
-    StoredInstrument, get_instrument, get_instrument_by_key, list_instruments,
+    InstrumentPageQuery, StoredInstrument, get_instrument, get_instrument_by_key, list_instruments,
     list_instruments_page, upsert_instruments,
 };
 pub use live_repository::{

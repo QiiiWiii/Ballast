@@ -94,13 +94,15 @@ pub(super) async fn list_instruments(
         .transpose()?;
     let (instruments, total) = ballast_storage::list_instruments_page(
         &state.database,
-        query.exchange,
-        query.market_kind,
-        query.active_only.unwrap_or(false),
-        query.search.as_deref(),
-        ids.as_deref(),
-        limit,
-        offset,
+        ballast_storage::InstrumentPageQuery {
+            exchange: query.exchange,
+            market_kind: query.market_kind,
+            active_only: query.active_only.unwrap_or(false),
+            search: query.search.as_deref(),
+            ids: ids.as_deref(),
+            limit,
+            offset,
+        },
     )
     .await
     .map_err(ApiError::database)?;

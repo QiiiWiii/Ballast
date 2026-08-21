@@ -16,6 +16,8 @@ docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
 ```
 
+Compose 会等待 PostgreSQL、Gateway 和 server 分别通过健康检查后再启动依赖服务；上线后应确认 `docker compose -f deploy/compose.yaml ps` 中业务容器处于 `healthy` 或正常运行状态。
+
 访问 `${BALLAST_PUBLIC_ORIGIN}`。网关需要能够访问五家交易所的公共 REST 和 WebSocket 域名。
 
 从当前源码本地构建（可选）：

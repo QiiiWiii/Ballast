@@ -18,4 +18,5 @@ COPY proto /app/proto
 
 USER node
 EXPOSE 50051
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=12 CMD ["node", "dist/healthcheck.js"]
 ENTRYPOINT ["node", "dist/index.js"]

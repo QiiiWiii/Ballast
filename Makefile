@@ -1,12 +1,15 @@
-.PHONY: check rust-check rust-test rust-fmt node-install node-check web-install web-check compose-config compose-up compose-down paper-smoke private-smoke
+.PHONY: check rust-check rust-clippy rust-test rust-fmt node-install node-check node-audit web-install web-check web-audit compose-config compose-up compose-down paper-smoke private-smoke
 
-check: rust-fmt rust-check rust-test node-check web-check compose-config
+check: rust-fmt rust-check rust-clippy rust-test node-check node-audit web-check web-audit compose-config
 
 rust-fmt:
 	cargo fmt --all -- --check
 
 rust-check:
 	cargo check --workspace --all-targets
+
+rust-clippy:
+	cargo clippy --workspace --all-targets -- -D warnings
 
 rust-test:
 	cargo test --workspace
@@ -17,11 +20,17 @@ node-install:
 node-check:
 	npm --prefix gateway-node run check
 
+node-audit:
+	npm --prefix gateway-node audit --audit-level=high
+
 web-install:
 	npm --prefix web ci
 
 web-check:
 	npm --prefix web run check
+
+web-audit:
+	npm --prefix web audit --audit-level=high
 
 compose-config:
 	docker compose -f deploy/compose.yaml config --quiet

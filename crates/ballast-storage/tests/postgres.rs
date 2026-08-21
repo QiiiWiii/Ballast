@@ -2,8 +2,8 @@ use ballast_core::{
     Exchange, Instrument, InstrumentId, MarketKind, QuantityUnit, Side, StrategyKind,
 };
 use ballast_storage::{
-    HistoricalCandle, NewExecutionTask, NewHistoricalBackfill, NewStrategyTemplate,
-    NewStrategyTemplateVersion, SliceRecord,
+    HistoricalCandle, InstrumentPageQuery, NewExecutionTask, NewHistoricalBackfill,
+    NewStrategyTemplate, NewStrategyTemplateVersion, SliceRecord,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -55,13 +55,15 @@ async fn task_persistence_is_idempotent_and_event_ordered() {
         .unwrap();
     let (instrument_page, total) = ballast_storage::list_instruments_page(
         &pool,
-        Some(Exchange::Binance),
-        Some(MarketKind::Spot),
-        true,
-        Some(&symbol),
-        None,
-        10,
-        0,
+        InstrumentPageQuery {
+            exchange: Some(Exchange::Binance),
+            market_kind: Some(MarketKind::Spot),
+            active_only: true,
+            search: Some(&symbol),
+            ids: None,
+            limit: 10,
+            offset: 0,
+        },
     )
     .await
     .unwrap();

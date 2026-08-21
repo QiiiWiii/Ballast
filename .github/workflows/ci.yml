@@ -35,6 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
   gateway:
@@ -49,6 +50,8 @@ jobs:
       - run: npm ci
         working-directory: gateway-node
       - run: npm run check
+        working-directory: gateway-node
+      - run: npm audit --audit-level=high
         working-directory: gateway-node
       - run: git diff --exit-code -- gateway-node/src/generated
 
@@ -65,12 +68,15 @@ jobs:
         working-directory: web
       - run: npm run check
         working-directory: web
+      - run: npm audit --audit-level=high
+        working-directory: web
 
   deployment-config:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker compose -f deploy/compose.yaml config --quiet
+      - run: docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml config --quiet
 
   images:
     runs-on: ubuntu-latest

@@ -413,9 +413,8 @@ pub(super) async fn check_live_risk(
         .await
         .map_err(ApiError::database)?;
     let current_exposure = risk::snapshot_exposure(snapshot.as_ref(), &instrument.id.symbol)
-        .map_err(|code| ApiError::conflict(code))?;
-    let account_age_ms =
-        risk::snapshot_age_ms(snapshot.as_ref()).map_err(|code| ApiError::conflict(code))?;
+        .map_err(ApiError::conflict)?;
+    let account_age_ms = risk::snapshot_age_ms(snapshot.as_ref()).map_err(ApiError::conflict)?;
     let projected_exposure = instrument
         .native_to_base_quantity(native_quantity, reference_price)
         .map_err(|_| ApiError::conflict("live_exposure_conversion_failed"))?

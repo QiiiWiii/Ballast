@@ -94,20 +94,28 @@ pub async fn list_instruments(pool: &DatabasePool) -> Result<Vec<StoredInstrumen
     rows.iter().map(row_to_instrument).collect()
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct InstrumentPageQuery<'a> {
+    pub exchange: Option<Exchange>,
+    pub market_kind: Option<MarketKind>,
+    pub active_only: bool,
+    pub search: Option<&'a str>,
+    pub ids: Option<&'a [Uuid]>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
 pub async fn list_instruments_page(
     pool: &DatabasePool,
-    exchange: Option<Exchange>,
-    market_kind: Option<MarketKind>,
-    active_only: bool,
-    search: Option<&str>,
-    ids: Option<&[Uuid]>,
-    limit: i64,
-    offset: i64,
+    query: InstrumentPageQuery<'_>,
 ) -> Result<(Vec<StoredInstrument>, i64), sqlx::Error> {
-    let exchange = exchange.map(exchange_text);
-    let market_kind = market_kind.map(market_kind_text);
-    let search = search.map(str::trim).filter(|value| !value.is_empty());
-    let ids = ids.filter(|value| !value.is_empty());
+    let exchange = query.exchange.map(exchange_text);
+    let market_kind = query.market_kind.map(market_kind_text);
+    let search = query
+        .search
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let ids = query.ids.filter(|value| !value.is_empty());
     let rows = sqlx::query(
         r#"
         SELECT *, COUNT(*) OVER()::bigint AS total_count
@@ -129,11 +137,11 @@ pub async fn list_instruments_page(
     )
     .bind(exchange)
     .bind(market_kind)
-    .bind(active_only)
+    .bind(query.active_only)
     .bind(search)
     .bind(ids)
-    .bind(limit)
-    .bind(offset)
+    .bind(query.limit)
+    .bind(query.offset)
     .fetch_all(pool)
     .await?;
     let total = rows

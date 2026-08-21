@@ -58,6 +58,8 @@ docker compose -f deploy/compose.yaml pull
 docker compose -f deploy/compose.yaml up -d
 ```
 
+Compose 会等待 PostgreSQL、Gateway 和 server 通过健康检查后再启动依赖服务；上线后用 `docker compose -f deploy/compose.yaml ps` 确认业务容器状态。
+
 升级：
 
 ```bash

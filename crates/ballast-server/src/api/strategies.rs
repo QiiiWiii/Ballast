@@ -347,8 +347,13 @@ fn validated_template_version(
             json!({}),
         ));
     }
-    let (execution_backend, venue_exchange, venue_market_kind, native_algorithm, native_params) =
-        validate_execution_backend(input)?;
+    let ValidatedExecutionBackend {
+        execution_backend,
+        venue_exchange,
+        venue_market_kind,
+        native_algorithm,
+        native_params,
+    } = validate_execution_backend(input)?;
     Ok(NewStrategyTemplateVersion {
         strategy_kind: util::strategy_text(input.strategy).to_owned(),
         quantity_unit: util::quantity_unit_text(input.quantity_unit).to_owned(),
@@ -371,15 +376,17 @@ fn validated_template_version(
     })
 }
 
+struct ValidatedExecutionBackend {
+    execution_backend: String,
+    venue_exchange: Option<String>,
+    venue_market_kind: Option<String>,
+    native_algorithm: Option<String>,
+    native_params: Option<Value>,
+}
+
 fn validate_execution_backend(
     input: &StrategyTemplateInput,
-) -> ApiResult<(
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<Value>,
-)> {
+) -> ApiResult<ValidatedExecutionBackend> {
     if input.execution_backend == ExecutionBackendInput::ManagedIoc {
         if input.venue_exchange.is_some()
             || input.venue_market_kind.is_some()
@@ -390,7 +397,13 @@ fn validate_execution_backend(
                 json!({}),
             ));
         }
-        return Ok(("managed_ioc".to_owned(), None, None, None, None));
+        return Ok(ValidatedExecutionBackend {
+            execution_backend: "managed_ioc".to_owned(),
+            venue_exchange: None,
+            venue_market_kind: None,
+            native_algorithm: None,
+            native_params: None,
+        });
     }
     let exchange = input
         .venue_exchange
@@ -461,22 +474,22 @@ fn validate_execution_backend(
             "okx_twap"
         }
     };
-    Ok((
-        "venue_native_algo".to_owned(),
-        Some(util::exchange_text(exchange).to_owned()),
-        Some(
+    Ok(ValidatedExecutionBackend {
+        execution_backend: "venue_native_algo".to_owned(),
+        venue_exchange: Some(util::exchange_text(exchange).to_owned()),
+        venue_market_kind: Some(
             match market {
                 MarketKind::Spot => "spot",
                 MarketKind::Perpetual => "perpetual",
             }
             .to_owned(),
         ),
-        Some(algorithm.to_owned()),
-        Some(
+        native_algorithm: Some(algorithm.to_owned()),
+        native_params: Some(
             serde_json::to_value(config)
                 .map_err(|_| ApiError::validation("native_configuration_invalid", json!({})))?,
         ),
-    ))
+    })
 }
 
 fn require_native_shape(

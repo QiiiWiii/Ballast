@@ -4,6 +4,7 @@ members = [
   "crates/ballast-strategies",
   "crates/ballast-execution",
   "crates/ballast-simulator",
+  "crates/ballast-backtest",
   "crates/ballast-gateway-client",
   "crates/ballast-storage",
   "crates/ballast-server",

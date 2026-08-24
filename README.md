@@ -4,7 +4,7 @@ Ballast 是面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易所执�
 
 项目采用混合架构：Rust 负责策略、执行状态机、风险控制、持久化与对冲编排；Node.js/ccxt 网关负责交易所协议、认证、限频和行情/订单流连接。两者通过版本化的 gRPC/Protobuf 契约通信。
 
-> 当前状态：五家加密公共行情、版本化策略模板、真实行情驱动的纸面执行、运营工作台，以及可恢复的交易所历史行情回补已实现。私有账户与真实下单仍保持锁定。
+> 当前状态：五家加密公共行情、版本化策略模板、真实行情驱动的纸面执行、运营工作台、可恢复的交易所历史行情回补和 Docker 内策略回放已实现。私有账户与真实下单仍保持锁定。
 
 ## 路线图
 
@@ -15,6 +15,7 @@ Ballast 是面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易所执�
 - 执行状态机、切片与有序事件、WebSocket 断线补发
 - 运营控制舱、执行分析、市场与通道、系统状态
 - 可恢复公共历史回补与 Compose 多架构镜像部署
+- Docker 内公开历史行情 TWAP / POV 回放，明确交易量流动性模型与 L2 精确重放边界
 - `v0.1` 正式发布轨道、版本化 Docker Hub 镜像与公开域名 paper smoke
 
 **进行中（live P0 安全门槛，v0.2+）**
@@ -40,6 +41,7 @@ Ballast 是面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易所执�
 │   ├── ballast-strategies/  # TWAP / POV 策略
 │   ├── ballast-execution/   # 执行状态机和调度边界
 │   ├── ballast-simulator/   # 确定性模拟成交
+│   ├── ballast-backtest/    # 历史行情策略回放
 │   ├── ballast-gateway-client/ # gRPC 网关客户端
 │   ├── ballast-storage/     # PostgreSQL 持久化
 │   └── ballast-server/      # axum 管理 API

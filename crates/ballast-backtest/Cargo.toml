@@ -1,0 +1,18 @@
+[package]
+name = "ballast-backtest"
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ballast-core = { path = "../ballast-core" }
+ballast-simulator = { path = "../ballast-simulator" }
+ballast-strategies = { path = "../ballast-strategies" }
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

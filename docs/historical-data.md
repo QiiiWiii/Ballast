@@ -60,3 +60,25 @@ curl 'http://localhost:8080/api/v1/history/ohlcv?exchange=okx&market_kind=spot&s
 ```
 
 逐笔成交请求把 `data_type` 改为 `trades` 并省略 `timeframe`；查询使用 `/api/v1/history/trades`。
+
+## 策略验证回放
+
+策略验证使用独立的 `ballast-backtest` 容器。它先通过服务端同步公开标的并补回 OHLCV 或逐笔成交，再把结果送入 Rust 回放器；整个流程只访问公共历史行情，不读取私有凭证，也不会调用创建、撤销或修改订单的接口。
+
+回放的默认模型名为 `historical_volume_as_liquidity`：将每个时间片中的历史价格和成交量作为可用流动性，复用 TWAP/POV 策略与价格保护模拟 IOC。它不是 L2 订单簿重放，不能用来估计真实队列位置或精确冲击；需要盘口冲击验证时，必须使用已保存的真实 L2 数据。
+
+在仓库根目录执行一小时 OKX BTC/USDT K 线回放：
+
+```bash
+BACKTEST_START_AT=2026-08-24T00:00:00Z \
+BACKTEST_END_AT=2026-08-24T01:00:00Z \
+BACKTEST_TARGET_AMOUNT=0.1 \
+BACKTEST_STRATEGY=twap \
+BACKTEST_DATA_TYPE=ohlcv \
+BACKTEST_TIMEFRAME=1m \
+make backtest
+```
+
+`trades` 通常只有有限的近期公共回溯窗口，使用它时应把时间范围改为刚结束的近期窗口；需要更长窗口时使用 `BACKTEST_DATA_TYPE=ohlcv` 并设置 `BACKTEST_TIMEFRAME=1m`。POV 需要额外设置 `BACKTEST_PARTICIPATION_RATE`，例如 `0.05`。命令输出包含完成度、残余量、平均价、最差价、滑点、手续费和逐 tick 结果，金额和数量均以十进制字符串输出。
+
+常用参数：`BACKTEST_EXCHANGE`、`BACKTEST_MARKET_KIND`、`BACKTEST_SYMBOL`、`BACKTEST_SIDE`、`BACKTEST_QUANTITY_UNIT`、`BACKTEST_TICK_INTERVAL_SECONDS`、`BACKTEST_MAX_SLIPPAGE_BPS`、`BACKTEST_PAGE_LIMIT`、`BACKTEST_MAX_PAGES`、`BACKTEST_MAX_ROWS` 和 `BACKTEST_REQUEST_TIMEOUT_MS`。启用 OIDC 的服务需要给 `BACKTEST_BEARER_TOKEN` 一个至少具有 operator 权限的访问令牌。

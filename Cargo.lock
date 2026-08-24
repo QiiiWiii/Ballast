@@ -206,6 +206,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ballast-backtest"
+version = "0.1.1"
+dependencies = [
+ "ballast-core",
+ "ballast-simulator",
+ "ballast-strategies",
+ "chrono",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "ballast-core"
 version = "0.1.1"
 dependencies = [

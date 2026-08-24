@@ -52,6 +52,7 @@ OIDC / RBAC 已实现并可选启用；公开 paper 模式可留空，目标 pro
 - [ ] `deploy/compose.yaml` 在 amd64 与 arm64 上均可 `pull` 后启动
 - [x] 文档路径一致：README、部署、架构、能力矩阵与安全边界对齐
 - [x] 至少一条书面 smoke：同步标的 → 模板 → 纸面 TWAP → 切片/事件可读
+- [x] 公开历史行情可进入确定性 TWAP/POV 回放，输出完成度、滑点、手续费和逐 tick 结果；回放模型与 L2 精确重放边界有明确说明
 
 已在 arm64 Linux 服务器以预构建镜像完成公开域名 paper smoke；amd64 尚缺独立主机的实际 `pull` + 启动记录，因此双架构启动项保持未完成。
 

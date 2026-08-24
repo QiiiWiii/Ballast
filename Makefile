@@ -1,4 +1,4 @@
-.PHONY: check rust-check rust-clippy rust-test rust-fmt node-install node-check node-audit web-install web-check web-audit compose-config compose-up compose-down paper-smoke private-smoke
+.PHONY: check rust-check rust-clippy rust-test rust-fmt node-install node-check node-audit web-install web-check web-audit compose-config compose-up compose-down paper-smoke private-smoke acceptance
 
 check: rust-fmt rust-check rust-clippy rust-test node-check node-audit web-check web-audit compose-config
 
@@ -47,3 +47,6 @@ paper-smoke:
 private-smoke:
 	npm --prefix gateway-node run build
 	npm --prefix gateway-node run private-smoke
+
+acceptance:
+	sh scripts/acceptance/run.sh

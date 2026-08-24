@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{collections::HashMap, fs};
 
 use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
@@ -69,9 +69,18 @@ impl OidcValidatorInner {
             return Err("BALLAST_OIDC_ISSUER must be an absolute HTTPS URL".into());
         }
         config.issuer = issuer.to_owned();
-        let http = reqwest::Client::builder()
+        let mut http_builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(path) = optional_certificate_path("BALLAST_OIDC_ROOT_CERT_FILE")? {
+            let pem = fs::read(path)
+                .map_err(|_| "BALLAST_OIDC_ROOT_CERT_FILE could not be read".to_owned())?;
+            let certificate = reqwest::Certificate::from_pem(&pem).map_err(|_| {
+                "BALLAST_OIDC_ROOT_CERT_FILE is not a valid PEM certificate".to_owned()
+            })?;
+            http_builder = http_builder.add_root_certificate(certificate);
+        }
+        let http = http_builder
             .build()
             .map_err(|error| format!("oidc http client: {error}"))?;
         Ok(Self {
@@ -273,6 +282,15 @@ impl OidcValidatorInner {
         cache.keys = keys;
         cache.fetched_at = Some(Instant::now());
         Ok(())
+    }
+}
+
+fn optional_certificate_path(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value.trim().to_owned())),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} must be valid UTF-8")),
     }
 }
 

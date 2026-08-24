@@ -74,6 +74,14 @@ docker compose -f deploy/compose.yaml up -d
 docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 ```
 
+本地 P0 受控验收：
+
+```bash
+make acceptance
+```
+
+该命令使用 Docker 内 Mock OIDC、Mock Webhook 和无凭证 Gateway，验证权限、零默认风控、审批、kill switch、审计和脱敏告警，不调用真实订单接口。
+
 ## OKX 只读账户快照（可选）
 
 默认部署不读取交易所凭证。启用 P0.2 只读账户快照时，在宿主机创建 `deploy/secrets/okx-accounts.json`，格式参考 `deploy/okx-accounts.example.json`，并确保 API Key 仅有读取权限、禁用提现、绑定允许 IP。
@@ -101,8 +109,10 @@ private overlay 会将 `BALLAST_PRIVATE_RECONCILIATION_ENABLED=true`，用于读
 | `BALLAST_OIDC_ISSUER` | 空 | OIDC HTTPS issuer；为空时保持 paper/open 模式 |
 | `BALLAST_OIDC_AUDIENCE` | 空 | API access token audience |
 | `BALLAST_OIDC_CLIENT_ID` | 空 | Web Authorization Code + PKCE 公共客户端 ID |
+| `BALLAST_OIDC_ROOT_CERT_FILE` | 空 | 可选自定义 OIDC HTTPS 根证书，仅用于受控私有 CA |
 | `BALLAST_PRIVATE_RECONCILIATION_ENABLED` | `false` | 仅 private overlay 启用账户快照和本地已知订单查询 worker |
 | `BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL` | 空 | 可选 HTTPS 告警接收端；只发送账户、交易所、运行 ID、差异数量和类型摘要 |
+| `BALLAST_RECONCILIATION_ALERT_ROOT_CERT_FILE` | 空 | 可选自定义告警 HTTPS 根证书，仅用于受控私有 CA |
 
 ## CI 发布
 

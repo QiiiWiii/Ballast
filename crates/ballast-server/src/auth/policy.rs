@@ -78,6 +78,7 @@ fn is_public(method: &Method, path: &str) -> bool {
     matches!(
         (method, path),
         (&Method::GET, "/health")
+            | (&Method::HEAD, "/health")
             | (&Method::GET, "/metrics")
             | (&Method::GET, "/api/v1/live/readiness")
     )

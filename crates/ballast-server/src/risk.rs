@@ -158,31 +158,33 @@ pub(crate) async fn check(
             )
             .await;
         }
-        if context.native_algo_orders > limit.max_native_algo_orders {
-            return deny(
-                database,
-                stage,
-                context,
-                inputs,
-                "max_native_algo_orders_exceeded",
-            )
-            .await;
-        }
-        if context.native_duration_seconds > limit.max_native_duration_seconds {
-            return deny(
-                database,
-                stage,
-                context,
-                inputs,
-                "max_native_duration_exceeded",
-            )
-            .await;
+        if context.backend == "venue_native_algo" {
+            if context.native_algo_orders > limit.max_native_algo_orders {
+                return deny(
+                    database,
+                    stage,
+                    context,
+                    inputs,
+                    "max_native_algo_orders_exceeded",
+                )
+                .await;
+            }
+            if context.native_duration_seconds > limit.max_native_duration_seconds {
+                return deny(
+                    database,
+                    stage,
+                    context,
+                    inputs,
+                    "max_native_duration_exceeded",
+                )
+                .await;
+            }
         }
     }
 
     record_risk_decision(
         database,
-        context.task_id,
+        audited_task_id(stage, context),
         Some(&context.account_id),
         stage.as_str(),
         "allowed",
@@ -202,7 +204,7 @@ async fn deny(
 ) -> Result<(), RiskError> {
     record_risk_decision(
         database,
-        context.task_id,
+        audited_task_id(stage, context),
         Some(&context.account_id),
         stage.as_str(),
         "denied",
@@ -211,6 +213,13 @@ async fn deny(
     )
     .await?;
     Err(RiskError::Denied(code))
+}
+
+fn audited_task_id(stage: RiskStage, context: &RiskContext) -> Option<Uuid> {
+    match stage {
+        RiskStage::Create => None,
+        RiskStage::Approve | RiskStage::Submit => context.task_id,
+    }
 }
 
 fn switch_matches(switch: &StoredKillSwitch, context: &RiskContext) -> bool {
@@ -330,13 +339,40 @@ pub(crate) async fn latest_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::allowed;
+    use super::{RiskContext, RiskStage, allowed, audited_task_id};
+    use rust_decimal::Decimal;
     use serde_json::json;
+    use uuid::Uuid;
 
     #[test]
     fn allow_lists_are_explicit() {
         assert!(allowed(&json!(["okx"]), "okx"));
         assert!(!allowed(&json!([]), "okx"));
         assert!(!allowed(&json!(["okx"]), "binance"));
+    }
+
+    #[test]
+    fn create_risk_decisions_do_not_reference_unpersisted_tasks() {
+        let context = RiskContext {
+            task_id: Some(Uuid::nil()),
+            account_id: "account".to_owned(),
+            exchange: "okx".to_owned(),
+            instrument_id: Uuid::nil(),
+            backend: "managed_ioc".to_owned(),
+            order_notional: Decimal::ZERO,
+            task_notional: Decimal::ZERO,
+            market_age_ms: 0,
+            account_age_ms: 0,
+            max_slippage_bps: 0,
+            daily_notional: Decimal::ZERO,
+            net_exposure: Decimal::ZERO,
+            native_algo_orders: 0,
+            native_duration_seconds: 0,
+        };
+        assert_eq!(audited_task_id(RiskStage::Create, &context), None);
+        assert_eq!(
+            audited_task_id(RiskStage::Approve, &context),
+            context.task_id
+        );
     }
 }

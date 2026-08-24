@@ -1,0 +1,5 @@
+services:
+  server:
+    environment:
+      BALLAST_LIVE_ENABLED: "true"
+      BALLAST_PRIVATE_RECONCILIATION_ENABLED: "true"

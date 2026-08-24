@@ -26,6 +26,14 @@ Compose 会等待 PostgreSQL、Gateway 和 server 分别通过健康检查后再
 docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml up --build -d
 ```
 
+本地 P0 受控验收（只使用 Docker 内 Mock OIDC、Mock Webhook 和无凭证 Gateway，不下真实订单）：
+
+```bash
+make acceptance
+```
+
+该验收覆盖未认证拒绝、角色权限、三层零限额、双人审批、禁止自批、kill switch、审计决策和脱敏 Webhook；完成后环境保留在 `http://127.0.0.1:18080`。自定义 HTTPS 测试 CA 仅通过 `BALLAST_OIDC_ROOT_CERT_FILE` 与 `BALLAST_RECONCILIATION_ALERT_ROOT_CERT_FILE` 显式挂载，生产默认留空。
+
 OKX 只读账户快照使用独立 overlay，默认部署不挂载交易所凭证：
 
 ```bash

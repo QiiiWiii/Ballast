@@ -23,11 +23,21 @@ const RETRY_BASE_SECONDS: i64 = 10;
 
 pub fn spawn_worker(database: DatabasePool, config: ReconciliationAlertConfig) {
     tokio::spawn(async move {
-        let client = match Client::builder()
+        let mut client_builder = Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(pem) = config.root_certificate_pem.as_deref() {
+            match reqwest::Certificate::from_pem(pem) {
+                Ok(certificate) => {
+                    client_builder = client_builder.add_root_certificate(certificate);
+                }
+                Err(error) => {
+                    error!(%error, "failed to initialize reconciliation alert webhook certificate");
+                    return;
+                }
+            }
+        }
+        let client = match client_builder.build() {
             Ok(client) => client,
             Err(error) => {
                 error!(%error, "failed to initialize reconciliation alert webhook client");

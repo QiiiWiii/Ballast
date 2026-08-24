@@ -1,0 +1,102 @@
+services:
+  acceptance-certs:
+    image: alpine:3.22
+    command: ["sh", "/opt/ballast/acceptance/generate-certs.sh"]
+    volumes:
+      - ballast-acceptance-certs:/certs
+      - ../scripts/acceptance/generate-certs.sh:/opt/ballast/acceptance/generate-certs.sh:ro
+    restart: "no"
+
+  acceptance-oidc:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/ballast/acceptance/mock-oidc.mjs"]
+    environment:
+      ACCEPTANCE_AUDIENCE: ballast-acceptance
+      ACCEPTANCE_ISSUER: https://acceptance-oidc:8443
+      ACCEPTANCE_ROLE_CLAIM: ballast_roles
+    volumes:
+      - ballast-acceptance-certs:/certs:ro
+      - ../scripts/acceptance/mock-oidc.mjs:/opt/ballast/acceptance/mock-oidc.mjs:ro
+    depends_on:
+      acceptance-certs:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks: [ballast-private]
+
+  acceptance-webhook:
+    image: node:22-bookworm-slim
+    command: ["node", "/opt/ballast/acceptance/mock-webhook.mjs"]
+    volumes:
+      - ballast-acceptance-certs:/certs:ro
+      - ballast-acceptance-webhook:/state
+      - ../scripts/acceptance/mock-webhook.mjs:/opt/ballast/acceptance/mock-webhook.mjs:ro
+    depends_on:
+      acceptance-certs:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8081/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks: [ballast-private]
+
+  acceptance-seed:
+    image: postgres:17-bookworm
+    environment:
+      DATABASE_URL: postgres://ballast:${POSTGRES_PASSWORD:-ballast-local-only}@postgres:5432/ballast
+    command: ["sh", "/opt/ballast/acceptance/seed-account.sh"]
+    volumes:
+      - ../scripts/acceptance/seed-account.sh:/opt/ballast/acceptance/seed-account.sh:ro
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: "no"
+    networks: [ballast-private]
+
+  server:
+    environment:
+      BALLAST_OIDC_ISSUER: https://acceptance-oidc:8443
+      BALLAST_OIDC_AUDIENCE: ballast-acceptance
+      BALLAST_OIDC_ROLE_CLAIM: ballast_roles
+      BALLAST_OIDC_ROOT_CERT_FILE: /run/ballast-acceptance/ca.crt
+      BALLAST_RECONCILIATION_ALERT_WEBHOOK_URL: https://acceptance-webhook:8444/hook
+      BALLAST_RECONCILIATION_ALERT_ROOT_CERT_FILE: /run/ballast-acceptance/ca.crt
+      BALLAST_LIVE_ENABLED: ${BALLAST_LIVE_ENABLED:-false}
+    volumes:
+      - ballast-acceptance-certs:/run/ballast-acceptance:ro
+    depends_on:
+      acceptance-oidc:
+        condition: service_healthy
+      acceptance-webhook:
+        condition: service_healthy
+
+  web:
+    environment:
+      BALLAST_OIDC_ISSUER: https://acceptance-oidc:8443
+      BALLAST_OIDC_CLIENT_ID: ballast-acceptance-web
+      BALLAST_OIDC_AUDIENCE: ballast-acceptance
+    depends_on:
+      acceptance-oidc:
+        condition: service_healthy
+
+volumes:
+  ballast-acceptance-certs:
+    name: ballast-acceptance-certs
+  ballast-acceptance-state:
+    name: ballast-acceptance-state
+  ballast-acceptance-webhook:
+    name: ballast-acceptance-webhook

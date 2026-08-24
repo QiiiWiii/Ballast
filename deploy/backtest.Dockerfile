@@ -11,6 +11,7 @@ FROM node:22-bookworm-slim
 
 COPY --from=builder /app/target/release/ballast-backtest /usr/local/bin/ballast-backtest
 COPY scripts/backtest.mjs /opt/ballast/backtest.mjs
+COPY scripts/backtest-matrix.mjs /opt/ballast/backtest-matrix.mjs
 
 USER node
 ENTRYPOINT ["node", "/opt/ballast/backtest.mjs"]

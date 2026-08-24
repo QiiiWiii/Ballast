@@ -82,3 +82,20 @@ make backtest
 `trades` 通常只有有限的近期公共回溯窗口，使用它时应把时间范围改为刚结束的近期窗口；需要更长窗口时使用 `BACKTEST_DATA_TYPE=ohlcv` 并设置 `BACKTEST_TIMEFRAME=1m`。POV 需要额外设置 `BACKTEST_PARTICIPATION_RATE`，例如 `0.05`。命令输出包含完成度、残余量、平均价、最差价、滑点、手续费和逐 tick 结果，金额和数量均以十进制字符串输出。
 
 常用参数：`BACKTEST_EXCHANGE`、`BACKTEST_MARKET_KIND`、`BACKTEST_SYMBOL`、`BACKTEST_SIDE`、`BACKTEST_QUANTITY_UNIT`、`BACKTEST_TICK_INTERVAL_SECONDS`、`BACKTEST_MAX_SLIPPAGE_BPS`、`BACKTEST_PAGE_LIMIT`、`BACKTEST_MAX_PAGES`、`BACKTEST_MAX_ROWS` 和 `BACKTEST_REQUEST_TIMEOUT_MS`。启用 OIDC 的服务需要给 `BACKTEST_BEARER_TOKEN` 一个至少具有 operator 权限的访问令牌。
+
+批量比较五家交易所的 TWAP/POV 基线：
+
+```bash
+BACKTEST_START_AT=2026-08-23T00:00:00Z \
+BACKTEST_END_AT=2026-08-23T01:00:00Z \
+BACKTEST_TARGET_AMOUNT=0.1 \
+BACKTEST_DATA_TYPE=ohlcv \
+BACKTEST_TIMEFRAME=1m \
+BACKTEST_TICK_INTERVAL_SECONDS=3600 \
+BACKTEST_EXCHANGES=okx,binance,bybit,gate_io,bitget \
+BACKTEST_STRATEGIES=twap,pov \
+BACKTEST_MATRIX_POV_RATE=0.05 \
+make backtest-matrix
+```
+
+矩阵默认顺序执行，避免同时压迫交易所公共限频；输出只包含可比较的汇总字段，单案例逐 tick 明细继续使用 `make backtest`。需要非笛卡尔组合时，可用 `BACKTEST_MATRIX_JSON` 传入案例数组；案例字段使用 `case_id`、`exchange`、`symbol`、`strategy`、`participation_rate` 等小写名称覆盖全局变量。某一交易所没有数据或回补失败时，该案例标记为 `failed`，矩阵整体标记为 `partial`，不会被计入完成案例。

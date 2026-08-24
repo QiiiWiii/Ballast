@@ -16,6 +16,7 @@ Ballast 是面向 Binance、OKX、Bybit、Gate.io 与 Bitget 的多交易所执�
 - 运营控制舱、执行分析、市场与通道、系统状态
 - 可恢复公共历史回补与 Compose 多架构镜像部署
 - Docker 内公开历史行情 TWAP / POV 回放，明确交易量流动性模型与 L2 精确重放边界
+- Docker 内五家交易所策略验证矩阵与可比较汇总
 - `v0.1` 正式发布轨道、版本化 Docker Hub 镜像与公开域名 paper smoke
 
 **进行中（live P0 安全门槛，v0.2+）**

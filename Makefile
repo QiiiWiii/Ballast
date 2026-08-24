@@ -1,4 +1,4 @@
-.PHONY: check rust-check rust-clippy rust-test rust-fmt node-install node-check node-audit web-install web-check web-audit compose-config compose-up compose-down paper-smoke private-smoke acceptance backtest
+.PHONY: check rust-check rust-clippy rust-test rust-fmt node-install node-check node-audit web-install web-check web-audit compose-config compose-up compose-down paper-smoke private-smoke acceptance backtest backtest-matrix
 
 check: rust-fmt rust-check rust-clippy rust-test node-check node-audit web-check web-audit compose-config
 
@@ -53,3 +53,6 @@ acceptance:
 
 backtest:
 	docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml -f deploy/compose.backtest.yaml run --rm --build backtest
+
+backtest-matrix:
+	docker compose -f deploy/compose.yaml -f deploy/compose.build.yaml -f deploy/compose.backtest.yaml run --rm --build backtest-matrix
